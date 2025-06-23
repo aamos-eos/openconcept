@@ -14,6 +14,7 @@ from openmdao.api import (
     NewtonSolver,
     BoundsEnforceLS,
     CaseReader,
+    n2,
 )
 
 # imports for the airplane model itself
@@ -297,6 +298,7 @@ def set_values(prob, num_nodes, design_range, spec_energy):
 def run_hybrid_twin_active_thermal_analysis(plots=False):
     prob = configure_problem()
     prob.setup(check=False)
+    n2(prob)
     prob["cruise.hybridization"] = 0.05778372636876463
     set_values(prob, 11, 500, 450)
     prob.run_model()
