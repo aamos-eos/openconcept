@@ -366,7 +366,7 @@ class PowerSplitNacelle(ExplicitComponent):
                 total_power_out_gt[not_enough_idx] = np.zeros(nn)[not_enough_idx]
 
                 # Case where power requested from electric motor is less than total power needed from propeller
-                # if inputs['power_in'] >= inputs['power_split_amount']:
+                # if inputs['power_in'] >= inputs['power_split_amount'].:
                 enough_idx = np.where(inputs["power_in"] >= inputs["power_split_amount"])
                 total_power_out_em[enough_idx] = inputs["power_split_amount"][enough_idx]
                 total_power_out_gt[enough_idx] = inputs["power_in"][enough_idx] - inputs["power_split_amount"][enough_idx]
