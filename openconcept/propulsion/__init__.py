@@ -5,7 +5,7 @@ from .motor import SimpleMotor
 from .N3 import N3, N3Hybrid
 from .propeller import SimplePropeller, WeightCalc, ThrustCalc, PropCoefficients
 from .rubberized_turbofan import RubberizedTurbofan
-from .splitter import PowerSplit
+from .splitter import PowerSplit, PowerSplitNacelle
 from .turboshaft import SimpleTurboshaft
 
 # Pre-made propulsion systems

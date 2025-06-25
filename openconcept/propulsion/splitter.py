@@ -250,8 +250,8 @@ class PowerSplitNacelle(ExplicitComponent):
     def initialize(self):
         # define control rules
         self.options.declare("num_nodes", default=1, desc="Number of flight/control conditions")
-        self.options.declare("power_split_rule", default="fraction", desc="Control strategy - fraction or fixed power")
-        self.options.declare("power_split_bias", default="gt", desc="Determines which component the power split rule is with respect to")
+        self.options.declare("rule", default="fraction", desc="Control strategy - fraction or fixed power")
+        self.options.declare("bias", default="gt", desc="Determines which component the power split rule is with respect to")
 
         self.options.declare("efficiency", default=1.0, desc="Efficiency (dimensionless)")
         self.options.declare("weight_inc", default=0.0, desc="kg per input watt")
@@ -267,8 +267,8 @@ class PowerSplitNacelle(ExplicitComponent):
         self.add_input("num_gt", val=1, desc="Number of gas turbines in the nacelle")
         self.add_input("num_em", val=1, desc="Number of electric motors in the nacelle")
 
-        rule = self.options["power_split_rule"]
-        bias = self.options["power_split_bias"]
+        rule = self.options["rule"]
+        bias = self.options["bias"]
         if rule == "fraction":
             if bias == "gt":
                 self.add_input("power_split_fraction_gt", val=0.5, desc="Fraction of power from gas turbine(s)", shape=(nn,))
@@ -321,8 +321,8 @@ class PowerSplitNacelle(ExplicitComponent):
 
     def compute(self, inputs, outputs):
         nn = self.options["num_nodes"]
-        rule = self.options["power_split_rule"]
-        bias = self.options["power_split_bias"]
+        rule = self.options["rule"]
+        bias = self.options["bias"]
         weight_inc = self.options["weight_inc"]
         weight_base = self.options["weight_base"]
         cost_inc = self.options["cost_inc"]
@@ -366,7 +366,7 @@ class PowerSplitNacelle(ExplicitComponent):
                 total_power_out_gt[not_enough_idx] = np.zeros(nn)[not_enough_idx]
 
                 # Case where power requested from electric motor is less than total power needed from propeller
-                # if inputs['power_in'] >= inputs['power_split_amount'].:
+                # if inputs['power_in'] >= inputs['power_split_amount']:
                 enough_idx = np.where(inputs["power_in"] >= inputs["power_split_amount"])
                 total_power_out_em[enough_idx] = inputs["power_split_amount"][enough_idx]
                 total_power_out_gt[enough_idx] = inputs["power_in"][enough_idx] - inputs["power_split_amount"][enough_idx]
@@ -383,8 +383,8 @@ class PowerSplitNacelle(ExplicitComponent):
 
     def compute_partials(self, inputs, J):
         nn = self.options["num_nodes"]
-        rule = self.options["power_split_rule"]
-        bias = self.options["power_split_bias"]
+        rule = self.options["rule"]
+        bias = self.options["bias"]
 
         if rule == "fraction":
             if bias == "gt":
