@@ -11,7 +11,7 @@ class ParallelHybridNacelle(Group):
 
     def initialize(self):
         self.options.declare("num_nodes", default=1, desc="Number of mission analysis points to run")
-        self.options.declare("num_motors_per_nacelle", default=2, desc="Number of motors per nacelle")
+        self.options.declare("num_em_per_nac", default=2, desc="Number of motors per nacelle")
         self.options.declare("rule", default="fraction", desc="Rule for power split between turbo and electric motor.\
                              'fraction' means that the power split is a fraction of the total power.\
                              'fixed' means that the power split is derived from a fixed amount of power.")
@@ -19,23 +19,13 @@ class ParallelHybridNacelle(Group):
 
     def setup(self):
         nn = self.options["num_nodes"]
-        nm = self.options["num_motors_per_nacelle"]
+        nm = self.options["num_em_per_nac"]
         rule = self.options["rule"]
         bias = self.options["bias"]
 
         # define design variables that are independent of flight condition or control states
-        """
-        dvlist = [
-            ["ac|propulsion|engine|rating", "eng_rating", 745.0, "kW"],
-            ["ac|propulsion|propeller|diameter", "prop_diameter", 3.9, "m"],
-            ["ac|propulsion|motor|rating", "motor_rating", 1000.0, "kW"],
-            ["ac|propulsion|generator|rating", "gen_rating", 250.0, "kW"],
-            ["ac|weights|W_battery", "batt_weight", 2000, "kg"],
-            ["ac|propulsion|battery|specific_energy", "specific_energy", 300, "W*h/kg"],
-        ]
-        """
-        #self.add_subsystem("dvs", DVLabel(dvlist), promotes_inputs=["*"], promotes_outputs=["*"])
-        # introduce model components
+        
+
 
         for i in range(nm):
             self.add_subsystem(f"motor{i+1}", SimpleMotor(efficiency=0.97, num_nodes=nn), promotes_inputs=["throttle"])
@@ -45,7 +35,7 @@ class ParallelHybridNacelle(Group):
 
 
         # Organize power split between turbo and electric motor for each nacelle
-        self.add_subsystem("hybrid_split", PowerSplitNacelle(rule=rule, num_nodes=nn, bias=bias))
+        self.add_subsystem("hybrid_split", PowerSplitNacelle(rule=rule, num_nodes=nn, bias=bias, num_em_per_nac=nm), promotes_inputs=["*"], promotes_outputs=["*"])
         #self.connect("prop.shaft_power_in", "hybrid_split.power_in")
         # end
 
@@ -84,7 +74,7 @@ class QuadParallelHybridElectricPropulsionSystem(Group):
     def initialize(self):
         self.options.declare("num_nodes", default=1, desc="Number of mission analysis points to run")
         self.options.declare("num_props", default=4, desc="Number of props")
-        self.options.declare("num_motors_per_nacelle", default=2, desc="Number of motors per nacelle")
+        self.options.declare("num_em_per_nac", default=2, desc="Number of motors per nacelle")
         self.options.declare("rule", default="fraction", desc="Rule for power split between turbo and electric motor.\
                              'fraction' means that the power split is a fraction of the total power.\
                              'fixed' means that the power split is derived from a fixed amount of power.")
@@ -93,13 +83,29 @@ class QuadParallelHybridElectricPropulsionSystem(Group):
     def setup(self):
         nn = self.options["num_nodes"]
         npp = self.options["num_props"]
-        nm = self.options["num_motors_per_nacelle"]
+        nm = self.options["num_em_per_nac"]
         rule = self.options["rule"]
         bias = self.options["bias"]
 
+
+
+        dvlist = [
+            ["ac|propulsion|engine|rating", "eng_rating", 745.0, "kW"],
+            ["ac|propulsion|propeller|diameter", "prop_diameter", 3.9, "m"],
+            ["ac|propulsion|motor|rating", "motor_rating", 1000.0, "kW"],
+            ["ac|propulsion|generator|rating", "gen_rating", 250.0, "kW"],
+            ["ac|weights|W_battery", "batt_weight", 2000, "kg"],
+            ["ac|propulsion|battery|specific_energy", "specific_energy", 300, "W*h/kg"],
+        ]
+        
+        self.add_subsystem("dvs", DVLabel(dvlist), promotes_inputs=["*"], promotes_outputs=["*"])
+        # introduce model components
+
         for i in range(npp):
-            self.add_subsystem(f"nacelle{i+1}", ParallelHybridNacelle(num_nodes=nn, num_motors_per_nacelle=nm, rule=rule, bias=bias), promotes_inputs=[], promotes_outputs=[])
+            self.add_subsystem(f"nacelle{i+1}", ParallelHybridNacelle(num_nodes=nn, num_em_per_nac=nm, rule=rule, bias=bias), promotes_inputs=["fltcond|*"], promotes_outputs=[])
         # end
+
+
 
 
 
@@ -142,6 +148,12 @@ class QuadParallelHybridElectricPropulsionSystem(Group):
             self.connect(f"nacelle{i_p+1}.prop.thrust", f"add_power.prop{i_p+1}_thrust")
             input_prop_weight_names_str.append(f"nacelle{i_p+1}.prop{i_p+1}_weight")
             input_turbine_weight_names_str.append(f"nacelle{i_p+1}.turb.weight")
+            self.connect("prop_diameter", f"nacelle{i_p+1}.prop.diameter")
+            self.connect("motor_rating", f"nacelle{i_p+1}.power_rating_em")
+            self.connect("eng_rating", f"nacelle{i_p+1}.power_rating_gt")
+            #self.connect(f"nacelle{i_p+1}|power_split_fraction", f"nacelle{i_p+1}.{power_split_fraction_name}")
+            #self.connect("num_gt_per_nac", f"nacelle{i_p+1}.num_gt_per_nac")
+            #self.connect("num_em_per_nac", f"nacelle{i_p+1}.num_em_per_nac")
         # end
 
 
@@ -187,16 +199,16 @@ class QuadParallelHybridElectricPropulsionSystem(Group):
 
         # connect design variables to model component inputs
         #self.connect("eng_rating", "eng1.shaft_power_rating")
-        #self.connect("prop_diameter", ["prop1.diameter", "prop2.diameter"])
+        #self.connect("prop_diameter", ["nacelle1.prop.diameter", "nacelle2.prop.diameter", "nacelle3.prop.diameter", "nacelle4.prop.diameter"])
         #self.connect("motor_rating", ["motor1.elec_power_rating", "motor2.elec_power_rating"])
         #self.connect("motor_rating", ["prop1.power_rating", "prop2.power_rating"])
         #self.connect("gen_rating", "gen1.elec_power_rating")
         #self.connect("batt_weight", "batt1.battery_weight")
 
-        self.set_input_defaults("nacelle1.prop.diameter", val=2.5, units='m')
-        self.set_input_defaults("nacelle2.prop.diameter", val=2.5, units='m')
-        self.set_input_defaults("nacelle3.prop.diameter", val=2.5, units='m')
-        self.set_input_defaults("nacelle4.prop.diameter", val=2.5, units='m')
+        #self.set_input_defaults("nacelle1.prop.diameter", val=2.5, units='m')
+        #self.set_input_defaults("nacelle2.prop.diameter", val=2.5, units='m')
+        #self.set_input_defaults("nacelle3.prop.diameter", val=2.5, units='m')
+        #self.set_input_defaults("nacelle4.prop.diameter", val=2.5, units='m')
 
 
 #!/usr/bin/env python3
@@ -223,7 +235,7 @@ if __name__ == "__main__":
     num_nodes = 5
     
     # Add IndepVarComp that promotes all its outputs
-    ivc = prob.model.add_subsystem('ivc', IndepVarComp(), promotes_outputs=['*'])
+    ivc = IndepVarComp()
     
     # Flight conditions
     ivc.add_output('fltcond|rho', val=1.225 * np.ones(num_nodes), units='kg/m**3')
@@ -233,6 +245,8 @@ if __name__ == "__main__":
     ivc.add_output('fltcond|T', val=288.15 * np.ones(num_nodes), units='K')
     ivc.add_output('fltcond|p', val=101325.0 * np.ones(num_nodes), units='Pa')
     ivc.add_output('fltcond|q', val=0.5 * 1.225 * 100.0**2 * np.ones(num_nodes), units='Pa')
+    ivc.add_output('num_gt_per_nac', val=1, units=None)
+    ivc.add_output('num_em_per_nac', val=2, units=None)
     
     # Control inputs
     ivc.add_output('throttle', val=0.8 * np.ones(num_nodes), units=None)
@@ -250,18 +264,39 @@ if __name__ == "__main__":
     ivc.add_output('ac|propulsion|battery|specific_energy', val=300.0, units='W*h/kg')
     
     # Power split fraction
-    ivc.add_output('power_split_fraction', val=0.5 * np.ones(num_nodes), units=None)
+    ivc.add_output('nacelle1|power_split_fraction', val=0.5 * np.ones(num_nodes), units=None)
+    ivc.add_output('nacelle2|power_split_fraction', val=0.5 * np.ones(num_nodes), units=None)
+    ivc.add_output('nacelle3|power_split_fraction', val=0.5 * np.ones(num_nodes), units=None)
+    ivc.add_output('nacelle4|power_split_fraction', val=0.5 * np.ones(num_nodes), units=None)
+
+    prob.model.add_subsystem('ivc', ivc, promotes_outputs=['*'])
+
+    npp = 4
+    nm = 2
+    rule = "fraction"
+    bias = "gt"
+
+
     
+
     # Add the propulsion system
     prob.model.add_subsystem(
         'propulsion',
-        QuadParallelHybridElectricPropulsionSystem(num_nodes=num_nodes),
+        QuadParallelHybridElectricPropulsionSystem(num_nodes=num_nodes, num_props=npp, num_em_per_nac=nm, rule=rule, bias=bias),
         promotes_inputs=['*'],
         promotes_outputs=['*']
     )
     
     # Set up the problem
+    for i in range(npp):
+        for j in range(nm):
+            pass
+        # end
+        prob.model.connect(f"nacelle{i+1}|power_split_fraction", f"nacelle{i+1}.power_split_fraction_gt")
+    # end
+
     prob.setup()
+
     n2(prob)
     
     print("Problem setup complete!")
