@@ -1,10 +1,18 @@
 from openconcept.propulsion import SimpleMotor, PowerSplitNacelle, SimpleGenerator, SimpleTurboshaft, SimplePropeller
 from openconcept.energy_storage import SimpleBattery, SOCBattery
 from openconcept.utilities import DVLabel, AddSubtractComp, ElementMultiplyDivideComp
+from openconcept.propulsion import EmpiricalMotor, EmpiricalPropeller, EmpiricalDynamicTurbo, EmpiricalStaticTurbo, DischargeEmpiricalBattery, ChargeEmpiricalBattery
+
+
 
 from openmdao.api import Group, BalanceComp, IndepVarComp, n2
 import numpy as np
+from openconcept.propulsion.battery_data import BatteryData
 
+# Load data immediately when module is imported - this ensures it's available for all components
+BatteryData.load_data(bat_filename='openconcept/propulsion/empirical_data/inHouse_battery_1motorConfig_208s27p_4grp_to_each_nacelle.xlsx', 
+                      cell_sheetname='BOL_cell_fct_CRate', 
+                      config_sheetname='battery_config')
 
 
 class ParallelHybridNacelle(Group):
@@ -28,10 +36,14 @@ class ParallelHybridNacelle(Group):
 
 
         for i in range(nm):
-            self.add_subsystem(f"motor{i+1}", SimpleMotor(efficiency=0.97, num_nodes=nn), promotes_inputs=["throttle"])
+            self.add_subsystem(f"motor{i+1}", EmpiricalMotor(num_nodes=nn), promotes_inputs=["throttle"])
         # end
-        self.add_subsystem("turb", SimpleTurboshaft(num_nodes=nn), promotes_outputs=["fuel_flow"])
-        self.add_subsystem("prop", SimplePropeller(num_nodes=nn), promotes_inputs=["fltcond|*"])
+        self.add_subsystem("turb", EmpiricalDynamicTurbo(num_nodes=nn), promotes_outputs=["fuel_flow"])
+        self.add_subsystem("prop", EmpiricalPropeller(num_nodes=nn,
+                                                      known_thrust = True,
+                                                      known_power = False,
+                                                      known_rpm = True, 
+                                                      use_dynamic_data = True), promotes_inputs=["fltcond|*"])
 
 
         # Organize power split between turbo and electric motor for each nacelle
@@ -262,6 +274,41 @@ if __name__ == "__main__":
     ivc.add_output('ac|propulsion|generator|rating', val=250.0, units='kW')
     ivc.add_output('ac|weights|W_battery', val=2000.0, units='kg')
     ivc.add_output('ac|propulsion|battery|specific_energy', val=300.0, units='W*h/kg')
+
+    # Propeller Inputs
+    ivc.add_output('diameter', val=4.4, units='m', desc='Propeller diameter')
+    ivc.add_output('rpm', val=1000.0 * np.ones(num_nodes), units='rpm', desc='RPM')
+
+    # Turbine Inputs
+    ivc.add_output('fltcond|h', 10000*0.3048 * np.ones(num_nodes), units='m', desc='Altitude in meters')
+    ivc.add_output('disa', 0 * np.ones(num_nodes), desc='DISA in degrees Celsius')
+    ivc.add_output('frac', 0.6 * np.ones(num_nodes), desc='Throttle fraction')
+
+    # Motor Inputs
+    ivc.add_output('voltage', 700 * np.ones(num_nodes), units=None, desc='Motor voltage')
+    ivc.add_output('power_W', 125 * 1000 * np.ones(num_nodes), units='W', desc='Motor power')
+
+    # Battery Inputs
+    bat_data = BatteryData.get_data()
+
+    ivc.add_output('n_strngs', 4, desc='number of battery strings')
+    ivc.add_output('p_ptrain_elec', 100 * np.ones(num_nodes), units='W', desc='Total propulsion electric power demand')
+    ivc.add_output('n_motors', 4, desc='Number of electric motors')
+    ivc.add_output('rloop_motor_dc_in', 0.001 * np.ones(num_nodes), units='ohm', desc='DC loop resistance to each motor')
+    ivc.add_output('n_str', bat_data.n_str, desc='number of battery strings')
+    ivc.add_output('dtime', 1 * np.ones(num_nodes), units='s', desc='time step')
+    ivc.add_output('eta_converter', 0.95 * np.ones(num_nodes), units=None, desc='efficiency of the converter')
+
+    ivc.add_output('p_aux_elec', 100 * np.ones(num_nodes), units='W', desc='Auxiliary electric load on LV side')
+    ivc.add_output('rloop_aux_conv_hv_dc_in', 0.001 * np.ones(num_nodes), units='ohm', desc='DC loop resistance to LV converter')
+
+    # Load up Battery Data
+    ivc.add_output('cell_capacity', bat_data.cell_Ah_capacity, units='A*h', desc='Cell capacity')
+    ivc.add_output('t_cell_init', 30, units='K', desc='Initial temperature of the cell')
+    ivc.add_output('m_cell', bat_data.m_cell, units='kg', desc='Mass of the cell')
+    ivc.add_output('cp_cell', bat_data.cp_cell, units='J/kg/K', desc='Specific heat capacity of the cell')
+    ivc.add_output('q_cool_bat', 25 * np.ones(num_nodes), units='kW', desc='Cooling power of the battery')
+    ivc.add_output('soc_init', bat_data.soc_init, units=None, desc='Initial state of charge of the battery')
     
     # Power split fraction
     ivc.add_output('nacelle1|power_split_fraction', val=0.5 * np.ones(num_nodes), units=None)

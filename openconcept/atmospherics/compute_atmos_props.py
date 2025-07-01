@@ -48,7 +48,7 @@ class ComputeAtmosphericProperties(Group):
 
     def initialize(self):
         self.options.declare("num_nodes", default=1, desc="Number of mission analysis points to run")
-        self.options.declare("true_airspeed_in", default=False, desc="Number of mission analysis points to run")
+        self.options.declare("true_airspeed_in", default=False, desc="whether true airspeed is an input or output")
 
     def setup(self):
         nn = self.options["num_nodes"]
