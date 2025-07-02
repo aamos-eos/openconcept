@@ -6,11 +6,12 @@ class MotorDataGraphEff:
     rpm_data = None
     torque_data = None
     eff_data = None
+
     
     @classmethod
     def load_data(cls, motor_filename='openconcept/propulsion/empirical_data/H3X_HPDM_2300_eff.xlsx'):
         """Load data once and store it in the class variables"""
-        if cls.voltage_data is None:  # Only load if not already loaded
+        if cls.rpm_data is None:  # Only load if not already loaded
             # Read the Excel file (assumes headers are in the first row)
             df = pd.read_excel(motor_filename)
             
@@ -37,10 +38,10 @@ class MotorDataGraphEff:
             print("Motor data from H3X_HPDM_2300_eff.xlsx loaded successfully!")
     
     @classmethod
-    def get_data(cls):
+    def get_data(cls, motor_filename='openconcept/propulsion/empirical_data/H3X_HPDM_2300_eff.xlsx'):
         """Ensure data is loaded and return all data as a tuple"""
-        if cls.voltage_data is None:
-            cls.load_data()
+        if cls.rpm_data is None:
+            cls.load_data(motor_filename)
         return cls
 
 
@@ -80,8 +81,8 @@ class MotorDataGraphVolts:
             print("Motor data from H3X_HPDM_2300_volts.xlsx loaded successfully!")
     
     @classmethod
-    def get_data(cls):
+    def get_data(cls, motor_filename='openconcept/propulsion/empirical_data/H3X_HPDM_2300_volts.xlsx'):
         """Ensure data is loaded and return all data as a tuple"""
         if cls.voltage_data is None:
-            cls.load_data()
+            cls.load_data(motor_filename)
         return cls

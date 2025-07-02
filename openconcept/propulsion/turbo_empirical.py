@@ -17,8 +17,6 @@ import os, sys
 # Import the global data store
 from openconcept.propulsion.turbo_data import TurboData
 
-# Load data immediately when module is imported - this ensures it's available for all components
-TurboData.load_data(turbo_filename='openconcept/propulsion/empirical_data/PT6E-67XP-4_EngData.xlsx', sheet_name='CRZ')
 
 
 class EmpiricalDynamicTurbo(om.Group):
@@ -28,6 +26,9 @@ class EmpiricalDynamicTurbo(om.Group):
     
     def initialize(self):
         self.options.declare('num_nodes', default=1, desc='number of nodes to evaluate')
+        # Load data immediately when module is imported - this ensures it's available for all components
+        TurboData.load_data(turbo_filename='openconcept/propulsion/empirical_data/PT6E-67XP-4_EngData.xlsx', sheet_name='CRZ')
+
     
     def setup(self):
         # Unpack Options
@@ -52,6 +53,9 @@ class EmpiricalStaticTurbo(om.Group):
     
     def initialize(self):
         self.options.declare('num_nodes', default=1, desc='number of nodes to evaluate')
+        # Load data immediately when module is imported - this ensures it's available for all components
+        TurboData.load_data(turbo_filename='openconcept/propulsion/empirical_data/PT6E-67XP-4_EngData.xlsx', sheet_name='CRZ')
+
     
     def setup(self):
         # Unpack Options
@@ -77,7 +81,7 @@ def test_interpolation_accuracy():
     print("Testing interpolation accuracy...")
     
     # Get the data
-    turbo_data = TurboData.get_data()
+    turbo_data = TurboData.get_data(turbo_filename='openconcept/propulsion/empirical_data/PT6E-67XP-4_EngData.xlsx', sheet_name='CRZ')
     
     # Randomly sample 100 points from dynamic conditions
     n_test_points = 100

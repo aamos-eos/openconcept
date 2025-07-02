@@ -18,10 +18,6 @@ import os, sys
 # Import the global data store
 from openconcept.propulsion.battery_data import BatteryData
 
-# Load data immediately when module is imported - this ensures it's available for all components
-BatteryData.load_data(bat_filename='openconcept/propulsion/empirical_data/inHouse_battery_1motorConfig_208s27p_4grp_to_each_nacelle.xlsx', 
-                      cell_sheetname='BOL_cell_fct_CRate', 
-                      config_sheetname='battery_config')
 
     
 
@@ -61,6 +57,7 @@ class LineVoltageInterp2D(om.ExplicitComponent):
     """
     def initialize(self):
         self.options.declare('num_nodes', default=1, desc='number of nodes to evaluate')
+        self.options.declare('v_cutoff', default=2.5, desc='Voltage cutoff for cell')
 
     def setup(self):
         num_nodes = self.options['num_nodes']
@@ -88,7 +85,7 @@ class LineVoltageInterp2D(om.ExplicitComponent):
         test_points = np.column_stack([soc, c_rate])
         
         # Interpolate line voltage
-        vline_cell = self.rbf_interpolator(test_points)
+        vline_cell = np.maximum(self.rbf_interpolator(test_points), self.options['v_cutoff'])
         
         outputs['vline_cell'] = vline_cell
 
@@ -307,10 +304,13 @@ class DischargeEmpiricalBattery(om.Group):
     def initialize(self):
 
         self.options.declare('num_nodes', default=1, desc='number of nodes to evaluate')
+        self.options.declare('v_cutoff', default=2.5, desc='Voltage cutoff for cell')
+
+        BatteryData.load_data(bat_filename='openconcept/propulsion/empirical_data/inHouse_battery_1motorConfig_208s27p_4grp_to_each_nacelle.xlsx', 
+                            cell_sheetname='BOL_cell_fct_CRate', 
+                            config_sheetname='battery_config')
 
     def setup(self):
-        # No need to unpack data options anymore
-        #self.add_subsystem('sys2cell', BatterySys2CellCurrent(), promotes=['*'])
 
         # Unpack Options
         num_nodes = self.options['num_nodes']
@@ -324,13 +324,18 @@ class DischargeEmpiricalBattery(om.Group):
 
         # 2D interpolation: SOC + C-rate meshgrid to line voltage and IR0
         # Line voltage interpolator (2D: SOC + C-rate)
-        self.add_subsystem('line_voltage_crate_interp', LineVoltageInterp2D(num_nodes=num_nodes), promotes=['*'])
+        self.add_subsystem('line_voltage_crate_interp', LineVoltageInterp2D(num_nodes=num_nodes, v_cutoff=self.options['v_cutoff']), promotes=['*'])
 
         # IR0 interpolator (2D: SOC + C-rate)
         self.add_subsystem('ir0_map', IR0Interp2D(num_nodes=num_nodes), promotes=['*'])
 
         # Solvers
         self.nonlinear_solver = om.NewtonSolver(solve_subsystems=True)
+        self.nonlinear_solver.options['maxiter'] = 100
+        self.nonlinear_solver.options['atol'] = 1e-6
+        self.nonlinear_solver.options['rtol'] = 1e-6
+        self.nonlinear_solver.options['iprint'] = 2
+        #self.nonlinear_solver.options['iprint_level'] = 0
         self.linear_solver = om.DirectSolver()
 
 
@@ -521,7 +526,9 @@ def test_battery_interpolation_accuracy():
     print("Testing battery interpolation accuracy...")
     
     # Get the data
-    bat_data = BatteryData.get_data()
+    bat_data = BatteryData.get_data(bat_filename='openconcept/propulsion/empirical_data/inHouse_battery_1motorConfig_208s27p_4grp_to_each_nacelle.xlsx', 
+                                    cell_sheetname='BOL_cell_fct_CRate', 
+                                    config_sheetname='battery_config')
     
     # Get all available data points for 2D interpolations
     line_voltage_flat = bat_data.line_voltage_flat
@@ -772,10 +779,18 @@ IR0 (2D RBF):
     }
 
 
+
+
 if __name__ == "__main__":
+
+
+
     
     # Get the data for any other calculations you need
-    bat_data = BatteryData.get_data()
+    bat_data = BatteryData.get_data(bat_filename='openconcept/propulsion/empirical_data/inHouse_battery_1motorConfig_208s27p_4grp_to_each_nacelle.xlsx', 
+                                    cell_sheetname='BOL_cell_fct_CRate', 
+                                    config_sheetname='battery_config')
+    
 
     
     
@@ -821,7 +836,7 @@ if __name__ == "__main__":
     model.add_subsystem('ivc', ivc, promotes=['*'])
     #model.add_subsystem('charge_cell_group', ChargeEmpiricalBattery(charge_mode='known_power', num_nodes=num_nodes), promotes=['*'])
 
-    model.add_subsystem('discharge_cell_group', DischargeEmpiricalBattery(num_nodes=num_nodes), promotes=['*'])
+    model.add_subsystem('discharge_cell_group', DischargeEmpiricalBattery(num_nodes=num_nodes, v_cutoff=2.5), promotes=['*'])
 
     #model.options['default_surrogate'] = om.NearestNeighbor()
     prob = om.Problem(model, reports=False)

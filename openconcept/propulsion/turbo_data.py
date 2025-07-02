@@ -76,8 +76,8 @@ class TurboData:
             cls.dyn_power_data__W = cls.dyn_power_data__kW * 1000
     
     @classmethod
-    def get_data(cls):
+    def get_data(cls, turbo_filename, sheet_name='CRZ'):
         """Ensure data is loaded and return all data as a tuple"""
         if cls.dyn_disa_data__degC is None:
-            cls.load_data()
+            cls.load_data(turbo_filename, sheet_name)
         return cls 

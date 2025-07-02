@@ -40,8 +40,8 @@ class MotorData:
             print("Motor data loaded successfully!")
     
     @classmethod
-    def get_data(cls):
+    def get_data(cls, motor_filename):
         """Ensure data is loaded and return all data as a tuple"""
         if cls.voltage_data is None:
-            cls.load_data()
+            cls.load_data(motor_filename)
         return cls 

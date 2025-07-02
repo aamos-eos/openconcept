@@ -15,9 +15,6 @@ import os, sys
 # Import the global data store
 from openconcept.propulsion.propeller_data import PropellerData
 
-# Load data immediately when module is imported - this ensures it's available for all components
-PropellerData.load_data(prop_filename='openconcept/propulsion/empirical_data/DOWTY_prop_5blade_14p3ft.xlsx', sheet_name='data')
-
 
 
 class EfficiencyCalc(om.ExplicitComponent):
@@ -237,6 +234,10 @@ class EmpiricalPropeller(om.Group):
         self.options.declare('known_rpm', default=False, desc='rpm is known')
         self.options.declare('use_dynamic_data', default=True, desc='use dynamic data if True, static if False')
     
+        # Load data immediately when module is imported - this ensures it's available for all components
+        PropellerData.load_data(prop_filename='openconcept/propulsion/empirical_data/DOWTY_prop_5blade_14p3ft.xlsx', sheet_name='data')
+
+
     def setup(self):
         num_nodes = self.options['num_nodes']
         known_thrust = self.options['known_thrust']
@@ -278,7 +279,7 @@ def test_propeller_interpolation_accuracy():
     print("Testing propeller interpolation accuracy...")
     
     # Get the data
-    prop_data = PropellerData.get_data()
+    prop_data = PropellerData.get_data(prop_filename='openconcept/propulsion/empirical_data/DOWTY_prop_5blade_14p3ft.xlsx', sheet_name='data')
     
     # Use dynamic data for testing (non-zero airspeed)
     alt_data = prop_data.dyn_dens_alt_data__m

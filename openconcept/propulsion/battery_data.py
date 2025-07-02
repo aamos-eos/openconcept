@@ -72,8 +72,8 @@ class BatteryData:
         print(f"Generated meshgrid data: {len(cls.soc_mesh_flat)} points ({len(cls.soc_data)} SOC × {len(cls.c_rate_data)} C-rate)")
     
     @classmethod
-    def get_data(cls):
+    def get_data(cls,bat_filename, cell_sheetname, config_sheetname):
         """Ensure data is loaded and return all data as a tuple"""
         if cls.soc_data is None:
-            cls.load_data()
+            cls.load_data(bat_filename, cell_sheetname, config_sheetname)
         return cls

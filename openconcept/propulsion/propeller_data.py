@@ -133,8 +133,8 @@ class PropellerData:
             print(f"Dynamic data points: {len(cls.dyn_thrust_data__N)}")
     
     @classmethod
-    def get_data(cls):
+    def get_data(cls, prop_filename, sheet_name='data'):
         """Ensure data is loaded and return all data as a tuple"""
         if cls.dyn_rpm_data__rpm is None:
-            cls.load_data()
+            cls.load_data(prop_filename, sheet_name)
         return cls 
