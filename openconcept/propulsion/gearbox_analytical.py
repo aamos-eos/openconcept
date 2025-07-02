@@ -331,16 +331,115 @@ class CombinedGearboxGroup(Group):
     def initialize(self):
         self.options.declare('num_nodes', default=1, desc='Number of analysis points')
         self.options.declare('n_motors', default=2, desc='Number of motor input shafts for planetary gearbox')
+        self.options.declare('output_set', default=False, desc='True when output (carrier) RPM, output power, turbine RPM, and gear ratios are set')
+
     
     def setup(self):
         num_nodes = self.options['num_nodes']
         n_motors = self.options['n_motors']
+        output_set = self.options['output_set']
         
         # Add the simple gearbox
         self.add_subsystem('simple_gearbox', SimpleGearbox(num_nodes=num_nodes), promotes=['*'])
         
-        # Add the planetary gearbox
-        self.add_subsystem('planetary_gearbox', PlanetaryGearbox(num_nodes=num_nodes, n_motors=n_motors), promotes=['*'])
+        if output_set:
+            # Add the flipped planetary gearbox
+            self.add_subsystem('planetary_gearbox', FlippedPlanetaryGearbox(num_nodes=num_nodes, n_motors=n_motors), promotes=['*'])
+        else:
+            # Add the planetary gearbox
+            self.add_subsystem('planetary_gearbox', PlanetaryGearbox(num_nodes=num_nodes, n_motors=n_motors), promotes=['*'])
+        # end 
+
+
+class FlippedPlanetaryGearbox(ExplicitComponent):
+    """
+    Flipped planetary gearbox: Given output (carrier) RPM, output power, turbine RPM, and gear ratios,
+    solve for required input motor RPM and torques, and turbine torque.
+    """
+    def initialize(self):
+        self.options.declare('num_nodes', default=1, desc='Number of analysis points')
+        self.options.declare('n_motors', default=2, desc='Number of motor input shafts')
+        self.options.declare('motor_gb_efficiency', default=0.95, desc='Motor gear efficiency')
+        self.options.declare('turbine_gb_efficiency', default=0.90, desc='Turbine gear efficiency')
+        self.options.declare('N_sun', default=30, desc='Number of sun gear teeth')
+        self.options.declare('N_ring', default=90, desc='Number of ring gear teeth')
+
+    def setup(self):
+        nn = self.options['num_nodes']
+        n_motors = self.options['n_motors']
+
+        # Inputs
+        self.add_input('carrier_rpm', shape=(nn,), units='rpm', desc='Output shaft (carrier) RPM')
+        self.add_input('output_power', shape=(nn,), units='W', desc='Output shaft power (W)')
+        self.add_input('turbine_rpm', shape=(nn,), units='rpm', desc='Turbine RPM')
+        self.add_input('motor_gear_ratio', units=None, desc='Motor gear ratio')
+        self.add_input('turbine_gear_ratio', units=None, desc='Turbine gear ratio')
+
+        # Outputs (per motor)
+        for i in range(n_motors):
+            self.add_output(f'motor{i+1}_rpm', shape=(nn,), units='rpm', desc=f'Motor {i+1} RPM')
+            self.add_output(f'motor{i+1}_torque', shape=(nn,), units='N*m', desc=f'Motor {i+1} torque')
+        self.add_output('turbine_torque', shape=(nn,), units='N*m', desc='Turbine torque')
+
+        self.declare_partials('*', '*', method='cs')
+
+    def compute(self, inputs, outputs):
+        nn = self.options['num_nodes']
+        n_motors = self.options['n_motors']
+        motor_gb_eff = self.options['motor_gb_efficiency']
+        turbine_gb_eff = self.options['turbine_gb_efficiency']
+        N_sun = self.options['N_sun']
+        N_ring = self.options['N_ring']
+
+        carrier_rpm = inputs['carrier_rpm']
+        output_power = inputs['output_power']
+        turbine_rpm = inputs['turbine_rpm']
+        motor_gear_ratio = inputs['motor_gear_ratio']
+        turbine_gear_ratio = inputs['turbine_gear_ratio']
+
+        # Planetary gear blending factor
+        alpha = 1.0 / (1.0 + N_ring / N_sun)
+
+        # Turbine reduced RPM
+        turbine_reduced_rpm = turbine_rpm / turbine_gear_ratio
+
+        # Solve for required reduced motor RPM
+        # carrier_rpm = alpha * (motor_rpm / motor_gear_ratio) + (1-alpha) * turbine_reduced_rpm
+        # => motor_rpm = ((carrier_rpm - (1-alpha)*turbine_reduced_rpm)/alpha) * motor_gear_ratio
+        motor_rpm_reduced = (carrier_rpm - (1.0 - alpha) * turbine_reduced_rpm) / alpha
+        motor_rpm = motor_rpm_reduced * motor_gear_ratio
+
+        # Output torque from output power and carrier RPM
+        omega_c = carrier_rpm * 2.0 * np.pi / 60.0
+        carrier_torque = np.where(omega_c > 1e-8, output_power / omega_c, 0.0)
+
+        # Power split: output power = motor_power + turbine_power
+        # Let x = fraction of power from motors, (1-x) from turbine
+        # We'll use the same alpha as the blending factor for power split
+        # (This is a simplification; for more accurate modeling, solve for actual power split)
+        motor_power = alpha * output_power
+        turbine_power = (1.0 - alpha) * output_power
+
+        # Each motor shares power equally
+        motor_power_each = motor_power / n_motors
+        # Each motor's reduced RPM
+        omega_m_reduced = motor_rpm_reduced * 2.0 * np.pi / 60.0
+        # Each motor's torque at output (after gear)
+        motor_torque_out = np.where(omega_m_reduced > 1e-8, motor_power_each / omega_m_reduced, 0.0)
+        # Input torque before gear and efficiency
+        motor_torque_in = motor_torque_out / (motor_gear_ratio * motor_gb_eff)
+
+        # Turbine torque at output (after gear)
+        omega_t_reduced = turbine_reduced_rpm * 2.0 * np.pi / 60.0
+        turbine_torque_out = np.where(omega_t_reduced > 1e-8, turbine_power / omega_t_reduced, 0.0)
+        # Input torque before gear and efficiency
+        turbine_torque_in = turbine_torque_out / (turbine_gear_ratio * turbine_gb_eff)
+
+        # Set outputs
+        for i in range(n_motors):
+            outputs[f'motor{i+1}_rpm'] = motor_rpm
+            outputs[f'motor{i+1}_torque'] = motor_torque_in
+        outputs['turbine_torque'] = turbine_torque_in
 
 
 def test_gearbox_components():

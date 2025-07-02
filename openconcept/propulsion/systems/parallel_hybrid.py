@@ -8,7 +8,10 @@ from openconcept.propulsion.motor_empirical_rbf import EmpiricalMotor
 from openmdao.api import Group, BalanceComp, IndepVarComp, n2
 import numpy as np
 from openconcept.propulsion.battery_data import BatteryData
-from openconcept.propulsion.gearbox_analytical import SimpleGearbox, PlanetaryGearbox
+from openconcept.propulsion.gearbox_analytical import SimpleGearbox, PlanetaryGearbox, FlippedPlanetaryGearbox
+
+# Flipped planetary gearbox computes input motor RPM and torque from output (carrier) RPM, output power, turbine RPM, and gear ratios
+# Planetary gearbox computes output carrier RPM and torque from input motor and turbine RPM & torque and respective gear ratios
 
 # Load data immediately when module is imported - this ensures it's available for all components
 BatteryData.load_data(bat_filename='openconcept/propulsion/empirical_data/inHouse_battery_1motorConfig_208s27p_4grp_to_each_nacelle.xlsx', 
@@ -25,19 +28,32 @@ class ParallelHybridNacelle(Group):
                              'fraction' means that the power split is a fraction of the total power.\
                              'fixed' means that the power split is derived from a fixed amount of power.")
         self.options.declare("bias", default="gt", desc="Determines which component the power split rule is with respect to")
+        self.options.declare("thrust_set", default=False, desc="Solve for power from thrust input")
+        self.options.declare("power_set", default=False, desc="Solve for thrust from power input")
+        self.options.declare("rpm_set", default=False, desc="Solve for torque from RPM input")
 
     def setup(self):
         nn = self.options["num_nodes"]
         nm = self.options["num_em_per_nac"]
         rule = self.options["rule"]
         bias = self.options["bias"]
+        thrust_set = self.options["thrust_set"]
+        power_set = self.options["power_set"]
+        rpm_set = self.options["rpm_set"]
 
         # define design variables that are independent of flight condition or control states
         
 
 
         for i in range(nm):
-            self.add_subsystem(f"motor{i+1}", EmpiricalMotor(num_nodes=nn), promotes_inputs=[])
+            if power_set:
+                # Torque and speed are inputs. Solve for efficiency
+                motor_mode = 'torque_speed_in'
+            else:
+                # Power is input. Solve for efficiency
+                motor_mode = 'power_in'
+            # end
+            self.add_subsystem(f"motor{i+1}", EmpiricalMotor(num_nodes=nn, mode=motor_mode), promotes_inputs=[])
         # end
 
         # Gas Turbine Gearbox
@@ -46,13 +62,19 @@ class ParallelHybridNacelle(Group):
 
 
         # Planetary Gearbox for turbine and motor combination
-        self.add_subsystem('planetary_gearbox', PlanetaryGearbox(num_nodes=nn, n_motors=nm), promotes=['motor_gear_ratio','turbine_gear_ratio'])
+        if thrust_set:
+            self.add_subsystem('planetary_gearbox', FlippedPlanetaryGearbox(num_nodes=nn, n_motors=nm), promotes=['motor_gear_ratio','turbine_gear_ratio'])
+        elif power_set:
+            # Power is input. Solve for efficiency
+            self.add_subsystem('planetary_gearbox', PlanetaryGearbox(num_nodes=nn, n_motors=nm), promotes=['motor_gear_ratio','turbine_gear_ratio'])
+        # end
 
         self.add_subsystem("turb", EmpiricalDynamicTurbo(num_nodes=nn), promotes_outputs=[], promotes_inputs=["fltcond|*"])
+
         self.add_subsystem("prop", EmpiricalPropeller(num_nodes=nn,
-                                                      known_thrust = False,
-                                                      known_power = True,
-                                                      known_rpm = True, 
+                                                      known_thrust = thrust_set,
+                                                      known_power = power_set,
+                                                      known_rpm = rpm_set, 
                                                       use_dynamic_data = True), promotes_inputs=["fltcond|*"])
 
 
@@ -101,6 +123,7 @@ class QuadParallelHybridElectricPropulsionSystem(Group):
                              'fraction' means that the power split is a fraction of the total power.\
                              'fixed' means that the power split is derived from a fixed amount of power.")
         self.options.declare("bias", default="gt", desc="Determines which component the power split rule is with respect to")
+        self.options.declare("mode", default="mode_in", desc="Mode for motor input. 'torque_speed_in' means that the motor input is torque and speed. 'power_in' means that the motor input is power.")
 
     def setup(self):
         nn = self.options["num_nodes"]
@@ -373,7 +396,13 @@ if __name__ == "__main__":
     # Add the propulsion system
     prob.model.add_subsystem(
         'propulsion',
-        QuadParallelHybridElectricPropulsionSystem(num_nodes=num_nodes, num_props=npp, num_em_per_nac=nm, rule=rule, bias=bias),
+        QuadParallelHybridElectricPropulsionSystem(num_nodes=num_nodes, 
+                                                   num_props=npp, 
+                                                   num_em_per_nac=nm, 
+                                                   rule=rule, 
+                                                   bias=bias, 
+                                                   power_set = True,
+                                                   thrust_set = False),
         promotes_inputs=['*'],
         promotes_outputs=['*']
     )
