@@ -53,7 +53,7 @@ class BatteryData:
             cls._generate_meshgrid_data()
             
             print("Battery data loaded successfully!")
-            print(f"SOC range: {cls.soc_data.min():.2e} to {cls.soc_data.max():.2f}")
+            #print(f"SOC range: {cls.soc_data.min():.2e} to {cls.soc_data.max():.2f}")
     
     @classmethod
     def _generate_meshgrid_data(cls):
@@ -69,7 +69,7 @@ class BatteryData:
         cls.line_voltage_flat = line_voltage_mesh.flatten()
         cls.ir0_flat = ir0_mesh.flatten()
         
-        print(f"Generated meshgrid data: {len(cls.soc_mesh_flat)} points ({len(cls.soc_data)} SOC × {len(cls.c_rate_data)} C-rate)")
+        #print(f"Generated meshgrid data: {len(cls.soc_mesh_flat)} points ({len(cls.soc_data)} SOC × {len(cls.c_rate_data)} C-rate)")
     
     @classmethod
     def get_data(cls,bat_filename, cell_sheetname, config_sheetname):

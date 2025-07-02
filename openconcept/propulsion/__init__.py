@@ -7,7 +7,7 @@ from .propeller import SimplePropeller, WeightCalc, ThrustCalc, PropCoefficients
 from .rubberized_turbofan import RubberizedTurbofan
 from .splitter import PowerSplit, PowerSplitNacelle
 from .turboshaft import SimpleTurboshaft
-from .motor_voltage import EmpiricalMotor
+from .motor_empirical_rbf import EmpiricalMotor
 from .propeller_empirical import EmpiricalPropeller
 from .turbo_empirical import EmpiricalDynamicTurbo, EmpiricalStaticTurbo
 from .battery_empirical import ChargeEmpiricalBattery, DischargeEmpiricalBattery

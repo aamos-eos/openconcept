@@ -13,8 +13,8 @@ import json
 import os, sys
 
 # Import the global data store
-from openconcept.propulsion.motor_data_graph import MotorDataGraphEff
-from openconcept.propulsion.motor_data_graph import MotorDataGraphVolts
+from openconcept.propulsion.h3x_motor_data_web import MotorDataEffMap
+from openconcept.propulsion.h3x_motor_data_web import MotorDataPowerVoltCurve
 
 
 
@@ -29,7 +29,7 @@ def test_interpolation_accuracy():
     print("\n=== Testing Efficiency Interpolation ===")
     
     # Get the efficiency data
-    motor_eff_data = MotorDataGraphEff.get_data(motor_filename='openconcept/propulsion/empirical_data/H3X_HPDM_2300_eff.xlsx')
+    motor_eff_data = MotorDataEffMap.get_data(motor_filename='openconcept/propulsion/empirical_data/H3X_HPDM_2300_eff.xlsx')
     
     # Use actual data points for testing
     n_test_points = min(20, len(motor_eff_data.rpm_data))  # Test up to 20 points
@@ -56,9 +56,9 @@ def test_interpolation_accuracy():
     
     # Add efficiency interpolation component
     motor_eff_interp = om.MetaModelUnStructuredComp(vec_size=n_test_points, default_surrogate=om.ResponseSurface())
-    motor_eff_interp.add_input('rpm', 1500, training_data=MotorDataGraphEff.rpm_data, units=None, shape=(n_test_points,))
-    motor_eff_interp.add_input('torque', 5000, training_data=MotorDataGraphEff.torque_data, units=None, shape=(n_test_points,))
-    motor_eff_interp.add_output('eff', 0.93, training_data=MotorDataGraphEff.eff_data, units=None, shape=(n_test_points,))
+    motor_eff_interp.add_input('rpm', 1500, training_data=MotorDataEffMap.rpm_data, units=None, shape=(n_test_points,))
+    motor_eff_interp.add_input('torque', 5000, training_data=MotorDataEffMap.torque_data, units=None, shape=(n_test_points,))
+    motor_eff_interp.add_output('eff', 0.93, training_data=MotorDataEffMap.eff_data, units=None, shape=(n_test_points,))
     
     model.add_subsystem('motor_eff_interp', motor_eff_interp, promotes=['*'])
     
@@ -87,7 +87,7 @@ def test_interpolation_accuracy():
     print("\n=== Testing Voltage/Power Limit Interpolation ===")
     
     # Get the voltage data
-    motor_volts_data = MotorDataGraphVolts.get_data(motor_filename='openconcept/propulsion/empirical_data/H3X_HPDM_2300_volts.xlsx')
+    motor_volts_data = MotorDataPowerVoltCurve.get_data(motor_filename='openconcept/propulsion/empirical_data/H3X_HPDM_2300_volts.xlsx')
     
     # Use actual data points for testing
     n_test_points_volts = min(20, len(motor_volts_data.rpm_data))  # Test up to 20 points
@@ -114,9 +114,9 @@ def test_interpolation_accuracy():
     
     # Add voltage/power interpolation component
     motor_voltage_interp = om.MetaModelUnStructuredComp(vec_size=n_test_points_volts, default_surrogate=om.ResponseSurface())
-    motor_voltage_interp.add_input('rpm', 1500, training_data=MotorDataGraphVolts.rpm_data, units=None, shape=(n_test_points_volts,))
-    motor_voltage_interp.add_input('voltage', 600, training_data=MotorDataGraphVolts.voltage_data, units=None, shape=(n_test_points_volts,))
-    motor_voltage_interp.add_output('mech_power_lim', 2100, training_data=MotorDataGraphVolts.power_data, units=None, shape=(n_test_points_volts,))
+    motor_voltage_interp.add_input('rpm', 1500, training_data=MotorDataPowerVoltCurve.rpm_data, units=None, shape=(n_test_points_volts,))
+    motor_voltage_interp.add_input('voltage', 600, training_data=MotorDataPowerVoltCurve.voltage_data, units=None, shape=(n_test_points_volts,))
+    motor_voltage_interp.add_output('mech_power_lim', 2100, training_data=MotorDataPowerVoltCurve.power_data, units=None, shape=(n_test_points_volts,))
     
     model2.add_subsystem('motor_voltage_interp', motor_voltage_interp, promotes=['*'])
     
@@ -206,8 +206,8 @@ class ComputeMotorPower(om.ExplicitComponent):
     def initialize(self):
         self.options.declare('num_nodes', default=1, desc='number of nodes to evaluate')
         # Load data immediately when module is imported - this ensures it's available for all components
-        MotorDataGraphEff.load_data(motor_filename='openconcept/propulsion/empirical_data/H3X_HPDM_2300_eff.xlsx')
-        MotorDataGraphVolts.load_data(motor_filename='openconcept/propulsion/empirical_data/H3X_HPDM_2300_volts.xlsx')
+        MotorDataEffMap.load_data(motor_filename='openconcept/propulsion/empirical_data/H3X_HPDM_2300_eff.xlsx')
+        MotorDataPowerVoltCurve.load_data(motor_filename='openconcept/propulsion/empirical_data/H3X_HPDM_2300_volts.xlsx')
 
 
 
@@ -355,14 +355,14 @@ class EmpiricalMotor(om.Group):
         
         # Add the interpolation components
         motor_voltage_interp = om.MetaModelUnStructuredComp(vec_size=num_nodes, default_surrogate=om.ResponseSurface())
-        motor_voltage_interp.add_input('rpm', 1.0, training_data=MotorDataGraphVolts.rpm_data, units=None, shape=(num_nodes,))
-        motor_voltage_interp.add_input('voltage', 1.0, training_data=MotorDataGraphVolts.voltage_data, units=None, shape=(num_nodes,))
-        motor_voltage_interp.add_output('mech_power_lim', 1.0, training_data=MotorDataGraphVolts.power_data, units=None, shape=(num_nodes,))
+        motor_voltage_interp.add_input('rpm', 1.0, training_data=MotorDataPowerVoltCurve.rpm_data, units=None, shape=(num_nodes,))
+        motor_voltage_interp.add_input('voltage', 1.0, training_data=MotorDataPowerVoltCurve.voltage_data, units=None, shape=(num_nodes,))
+        motor_voltage_interp.add_output('mech_power_lim', 1.0, training_data=MotorDataPowerVoltCurve.power_data, units=None, shape=(num_nodes,))
         
         motor_eff_interp = om.MetaModelUnStructuredComp(vec_size=num_nodes, default_surrogate=om.ResponseSurface())
-        motor_eff_interp.add_input('rpm', 1.0, training_data=MotorDataGraphEff.rpm_data, units=None, shape=(num_nodes,))
-        motor_eff_interp.add_input('torque', 1.0, training_data=MotorDataGraphEff.torque_data, units=None, shape=(num_nodes,))
-        motor_eff_interp.add_output('eff', 1.0, training_data=MotorDataGraphEff.eff_data, units=None, shape=(num_nodes,))
+        motor_eff_interp.add_input('rpm', 1.0, training_data=MotorDataEffMap.rpm_data, units=None, shape=(num_nodes,))
+        motor_eff_interp.add_input('torque', 1.0, training_data=MotorDataEffMap.torque_data, units=None, shape=(num_nodes,))
+        motor_eff_interp.add_output('eff', 1.0, training_data=MotorDataEffMap.eff_data, units=None, shape=(num_nodes,))
         
         # Add the power computation components
         compute_power = ComputeMotorPower(num_nodes=num_nodes)

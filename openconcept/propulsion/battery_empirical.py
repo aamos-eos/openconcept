@@ -19,6 +19,105 @@ import os, sys
 from openconcept.propulsion.battery_data import BatteryData
 
 
+class MotorVoltage(om.ExplicitComponent):
+    """
+    Simple explicit component to determine the voltage at the motor.
+    
+    Takes i_cell and p_train_elec, n_motor, n_str and n_parallel_per_str as inputs.
+    Calculates p_motor = p_train_elec / n_motors
+    and v_motor = p_motor / (i_cell * n_str * n_parallel_per_str)
+    
+    Parameters
+    ----------
+    num_nodes : int
+        Number of analysis points (default: 1)
+    
+    Inputs
+    ------
+    i_cell : array_like
+        Cell current [A]
+    p_train_elec : array_like
+        Total propulsion electric power demand [W]
+    n_motor : int
+        Number of electric motors
+    n_str : int
+        Number of battery strings
+    n_parallel_per_str : int
+        Number of cells in parallel per string
+    
+    Outputs
+    -------
+    v_motor : array_like
+        Voltage at the motor [V]
+    """
+    
+    def initialize(self):
+        self.options.declare('num_nodes', default=1, desc='Number of analysis points')
+    
+    def setup(self):
+        nn = self.options['num_nodes']
+        
+        self.add_input('i_cell', units='A', shape=(nn,),
+                      desc='Cell current')
+        self.add_input('p_train_elec', units='W', shape=(nn,),
+                      desc='Total propulsion electric power demand')
+        self.add_input('n_motor', units=None, shape=(1,),
+                      desc='Number of electric motors')
+        self.add_input('n_str', units=None, shape=(1,),
+                      desc='Number of battery strings')
+        self.add_input('n_parallel_per_str', units=None, shape=(1,),
+                      desc='Number of cells in parallel per string')
+        
+        self.add_output('v_motor', units='V', shape=(nn,),
+                       desc='Voltage at the motor')
+        
+        # Declare partials
+        self.declare_partials('*', '*', method='exact')
+    
+    def compute(self, inputs, outputs):
+        i_cell = inputs['i_cell']
+        p_train_elec = inputs['p_train_elec']
+        n_motor = inputs['n_motor']
+        n_str = inputs['n_str']
+        n_parallel_per_str = inputs['n_parallel_per_str']
+        
+        # Calculate power per motor
+        p_motor = p_train_elec / n_motor
+        
+        # Calculate voltage at motor
+        v_motor = p_motor / (i_cell * n_str * n_parallel_per_str)
+        
+        outputs['v_motor'] = v_motor
+    
+    def compute_partials(self, inputs, partials):
+        nn = self.options['num_nodes']
+        
+        i_cell = inputs['i_cell']
+        p_train_elec = inputs['p_train_elec']
+        n_motor = inputs['n_motor']
+        n_str = inputs['n_str']
+        n_parallel_per_str = inputs['n_parallel_per_str']
+        
+        # Calculate intermediate values
+        p_motor = p_train_elec / n_motor
+        denominator = i_cell * n_str * n_parallel_per_str
+        
+        # ∂(v_motor)/∂(i_cell) = -p_motor / (i_cell^2 * n_str * n_parallel_per_str)
+        partials['v_motor', 'i_cell'] = -p_motor / (i_cell ** 2 * n_str * n_parallel_per_str) * np.eye(nn)
+        
+        # ∂(v_motor)/∂(p_train_elec) = 1 / (n_motor * i_cell * n_str * n_parallel_per_str)
+        partials['v_motor', 'p_train_elec'] = 1.0 / (n_motor * i_cell * n_str * n_parallel_per_str) * np.eye(nn)
+        
+        # ∂(v_motor)/∂(n_motor) = -p_train_elec / (n_motor^2 * i_cell * n_str * n_parallel_per_str)
+        partials['v_motor', 'n_motor'] = -p_train_elec / (n_motor ** 2 * i_cell * n_str * n_parallel_per_str)
+        
+        # ∂(v_motor)/∂(n_str) = -p_motor / (i_cell * n_str^2 * n_parallel_per_str)
+        partials['v_motor', 'n_str'] = -p_motor / (i_cell * n_str ** 2 * n_parallel_per_str)
+        
+        # ∂(v_motor)/∂(n_parallel_per_str) = -p_motor / (i_cell * n_str * n_parallel_per_str^2)
+        partials['v_motor', 'n_parallel_per_str'] = -p_motor / (i_cell * n_str * n_parallel_per_str ** 2)
+
+
     
 
 # Battery Pack
@@ -224,20 +323,20 @@ class UpdateCellState(om.ExplicitComponent):
 
         self.add_input('i_cell', units='A', desc='cell current', shape=(num_nodes,))
         self.add_input('dtime', units='s', desc='time step', shape=(num_nodes,))
-        self.add_input('cell_capacity', units='A*h', desc='cell capacity')
-        self.add_input('soc_init', units=None, desc='initial state of charge')
+        self.add_input('cell_capacity', units='A*h', desc='cell capacity', shape=(1,))
+        self.add_input('soc_init', units=None, desc='initial state of charge', shape=(1,))
         self.add_input('ir0_cell', units='ohm', desc='internal resistance of the cell', shape=(num_nodes,))
-        self.add_input('n_str', units=None, desc='number of strings')
-        self.add_input('n_series_per_str', units=None, desc='number of cells in series per string')
-        self.add_input('n_parallel_per_str', units=None, desc='number of cells in parallel per string')
+        self.add_input('n_str', units=None, desc='number of strings', shape=(1,))
+        self.add_input('n_series_per_str', units=None, desc='number of cells in series per string', shape=(1,))
+        self.add_input('n_parallel_per_str', units=None, desc='number of cells in parallel per string', shape=(1,))
         self.add_input('ocv_cell', units='V', desc='open circuit voltage of the cell', shape=(num_nodes,))
         self.add_input('vline_cell', units='V', desc='line voltage of the cell', shape=(num_nodes,))
-        self.add_input('t_cell_init', units='K', desc='initial temperature of the cell')
-        self.add_input('m_cell', units='kg', desc='mass of the cell')
-        self.add_input('cp_cell', units='J/kg/K', desc='specific heat capacity of the cell')
+        self.add_input('t_cell_init', units='K', desc='initial temperature of the cell', shape=(1,))
+        self.add_input('m_cell', units='kg', desc='mass of the cell', shape=(1,))
+        self.add_input('cp_cell', units='J/kg/K', desc='specific heat capacity of the cell', shape=(1,))
         self.add_input('q_cool_bat', units='kW', desc='cooling power of the battery', shape=(num_nodes,))
 
-        self.add_output('soc', units=None, desc='state of charge of the battery', shape=(num_nodes,)   )
+        self.add_output('soc', units=None, desc='state of charge of the battery', shape=(num_nodes,))
         self.add_output('t_cell', units='K', desc='temperature of the cell', shape=(num_nodes,))
         self.add_output('eta_cell', units=None, desc='efficiency of the cell', shape=(num_nodes,))
         self.add_output('net_q_heat_ess', units='W', desc='net heat of the battery', shape=(num_nodes,))
@@ -315,6 +414,7 @@ class DischargeEmpiricalBattery(om.Group):
         # Unpack Options
         num_nodes = self.options['num_nodes']
         self.add_subsystem('ptrain_hv_in', HVCurrentImplicit(num_nodes = num_nodes), promotes=['*'])
+        self.add_subsystem('motor_voltage', MotorVoltage(num_nodes=num_nodes), promotes=['*'])
         self.add_subsystem('aux_out', AuxCurrentImplicit(num_nodes = num_nodes), promotes=['*'])
 
         self.add_subsystem('update_cell_state', UpdateCellState(mode='discharge', num_nodes = num_nodes),promotes=['*'])
@@ -390,11 +490,11 @@ class HVCurrentImplicit(om.ImplicitComponent):
         # Unpack Options
         num_nodes = self.options['num_nodes']
 
-        self.add_input('p_ptrain_elec', units='W', desc='Total propulsion electric power demand', shape=(num_nodes,))
+        self.add_input('p_train_elec', units='W', desc='Total propulsion electric power demand', shape=(num_nodes,))
         self.add_input('rloop_motor_dc_in', units='ohm', desc='DC loop resistance to each motor', shape=(num_nodes,))
         self.add_input('vline_cell', units='V', desc='cell line voltage', shape=(num_nodes,))
-        self.add_input('n_str', desc='number of battery strings')
-        self.add_input('n_parallel_per_str', desc='number of cells in parallel per string')
+        self.add_input('n_str', desc='number of battery strings', shape=(1,))
+        self.add_input('n_parallel_per_str', desc='number of cells in parallel per string', shape=(1,))
 
         self.add_output('i_cell', units='A', desc='cell current', shape=(num_nodes,))
 
@@ -402,7 +502,7 @@ class HVCurrentImplicit(om.ImplicitComponent):
 
     def apply_nonlinear(self, inputs, outputs, residuals):
 
-        p_motor_total = inputs['p_ptrain_elec']
+        p_motor_total = inputs['p_train_elec']
         rloop_motor_dc_in = inputs['rloop_motor_dc_in']
         vline_cell = inputs['vline_cell']
         n_str = inputs['n_str']
@@ -418,7 +518,7 @@ class HVCurrentImplicit(om.ImplicitComponent):
 
         num_nodes = self.options['num_nodes']
 
-        p_motor_total = inputs['p_ptrain_elec']
+        p_motor_total = inputs['p_train_elec']
         rloop_motor_dc_in = inputs['rloop_motor_dc_in']
         vline_cell = inputs['vline_cell']
         n_str = inputs['n_str']
@@ -427,7 +527,7 @@ class HVCurrentImplicit(om.ImplicitComponent):
 
         p_cell = p_motor_total / n_str / n_parallel_per_str
 
-        partials['i_cell', 'p_ptrain_elec'] = np.eye(num_nodes) * 1.0 / n_str / n_parallel_per_str
+        partials['i_cell', 'p_train_elec'] = np.eye(num_nodes) * 1.0 / n_str / n_parallel_per_str
         partials['i_cell', 'rloop_motor_dc_in'] = np.eye(num_nodes) * i_cell **2
         partials['i_cell', 'vline_cell'] = np.eye(num_nodes) * -i_cell
         partials['i_cell', 'n_str'] =  -p_cell / n_str ** 2 / n_parallel_per_str
@@ -495,10 +595,10 @@ class CellChargeCurrent(om.ExplicitComponent):
 
         self.add_input('ocv_cell', units='V', desc='Open circuit voltage of the cell', shape=(num_nodes,))
         self.add_input('ir0_cell', units='ohm', desc='Internal resistance of the cell', shape=(num_nodes,))
-        self.add_input('i_cell_charge_lim', units='A', desc='Constant current setpoint (pack level)')
-        self.add_input('v_cell_charge_lim', units='V', desc='Constant voltage setpoint (pack level)')
-        self.add_input('n_series_per_str', desc='Number of cells in series')
-        self.add_input('n_parallel_per_str', desc='Number of cells in parallel')
+        self.add_input('i_cell_charge_lim', units='A', desc='Constant current setpoint (pack level)', shape=(1,))
+        self.add_input('v_cell_charge_lim', units='V', desc='Constant voltage setpoint (pack level)', shape=(1,))
+        self.add_input('n_series_per_str', desc='Number of cells in series', shape=(1,))
+        self.add_input('n_parallel_per_str', desc='Number of cells in parallel', shape=(1,))
         self.add_output('vline_cell', units='V', desc='Cell terminal voltage', shape=(num_nodes,))
         self.add_output('i_cell', units='A', desc='Cell current', shape=(num_nodes,))
         self.declare_partials('*', '*', method='cs')
@@ -805,8 +905,8 @@ if __name__ == "__main__":
     ivc = om.IndepVarComp()
 
     ivc.add_output('n_strngs', 4, desc='number of battery strings')
-    ivc.add_output('p_ptrain_elec', 100 * np.ones(num_nodes), units='W', desc='Total propulsion electric power demand')
-    ivc.add_output('n_motors', 4, desc='Number of electric motors')
+    ivc.add_output('p_train_elec', 100 * np.ones(num_nodes), units='W', desc='Total propulsion electric power demand')
+    ivc.add_output('n_motor', 4, desc='Number of electric motors')
     ivc.add_output('rloop_motor_dc_in', 0.001 * np.ones(num_nodes), units='ohm', desc='DC loop resistance to each motor')
     ivc.add_output('n_str', bat_data.n_str, desc='number of battery strings')
     ivc.add_output('dtime', 1 * np.ones(num_nodes), units='s', desc='time step')
@@ -848,7 +948,7 @@ if __name__ == "__main__":
     
     prob.setup()
 
-    #om.n2(prob)
+    om.n2(prob)
     prob.run_model()
 
 
@@ -964,6 +1064,6 @@ if __name__ == "__main__":
 
 
     # Test battery interpolation accuracy
-    test_battery_interpolation_accuracy()
+    #test_battery_interpolation_accuracy()
 
 

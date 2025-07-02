@@ -1,5 +1,5 @@
 import numpy as np
-from openmdao.api import ExplicitComponent
+from openmdao.api import ExplicitComponent, Group
 
 
 class PlanetaryGearbox(ExplicitComponent):
@@ -84,45 +84,13 @@ class PlanetaryGearbox(ExplicitComponent):
                       desc='Gear ratio for turbine reduction')
         
         # Output shaft variables
-        self.add_output('shaft_out_rpm', val=np.ones(nn) * 2000.0, units='rpm',
-                       desc='Output shaft RPM')
-        self.add_output('shaft_out_torque', val=np.ones(nn) * 200.0, units='N*m',
-                       desc='Output shaft torque')
-        self.add_output('power_loss', val=np.zeros(nn), units='W',
-                       desc='Power lost in the gearbox')
+        self.add_output('carrier_rpm', val=np.ones(nn) * 2000.0, units='rpm',
+                       desc='Carrier (output shaft) RPM')
+        self.add_output('carrier_torque', val=np.ones(nn) * 200.0, units='N*m',
+                       desc='Carrier (output shaft) torque')
         
         # Declare partials
-        for i in range(n_motors):
-            # RPM partials
-            self.declare_partials('shaft_out_rpm', f'motor{i+1}_rpm',
-                                rows=np.arange(nn), cols=np.arange(nn))
-            self.declare_partials('shaft_out_rpm', f'motor{i+1}_torque',
-                                rows=np.arange(nn), cols=np.arange(nn))
-            
-            # Torque partials
-            self.declare_partials('shaft_out_torque', f'motor{i+1}_rpm',
-                                rows=np.arange(nn), cols=np.arange(nn))
-            self.declare_partials('shaft_out_torque', f'motor{i+1}_torque',
-                                rows=np.arange(nn), cols=np.arange(nn))
-        
-        # Gear ratio partials
-        self.declare_partials('shaft_out_rpm', ['motor_gear_ratio', 'turbine_gear_ratio'],
-                            rows=np.arange(nn), cols=np.zeros(nn, dtype=int))
-        self.declare_partials('shaft_out_torque', ['motor_gear_ratio', 'turbine_gear_ratio'],
-                            rows=np.arange(nn), cols=np.zeros(nn, dtype=int))
-        
-        # Turbine partials
-        self.declare_partials('shaft_out_rpm', ['turbine_rpm', 'turbine_torque'],
-                            rows=np.arange(nn), cols=np.arange(nn))
-        self.declare_partials('shaft_out_torque', ['turbine_rpm', 'turbine_torque'],
-                            rows=np.arange(nn), cols=np.arange(nn))
-        
-        # Power loss partials
-        for i in range(n_motors):
-            self.declare_partials('power_loss', [f'motor{i+1}_rpm', f'motor{i+1}_torque'],
-                                rows=np.arange(nn), cols=np.arange(nn))
-        self.declare_partials('power_loss', ['turbine_rpm', 'turbine_torque'],
-                            rows=np.arange(nn), cols=np.arange(nn))
+        self.declare_partials('*', '*', method='exact')
     
     def compute(self, inputs, outputs):
         nn = self.options['num_nodes']
@@ -178,20 +146,8 @@ class PlanetaryGearbox(ExplicitComponent):
                                 np.zeros_like(output_rpm))
         
         # Set outputs
-        outputs['shaft_out_rpm'] = output_rpm
-        outputs['shaft_out_torque'] = output_torque
-        
-        # Calculate power loss
-        total_input_power = 0.0
-        for i in range(n_motors):
-            motor_rpm = inputs[f'motor{i+1}_rpm']
-            motor_torque = inputs[f'motor{i+1}_torque']
-            total_input_power += motor_rpm * motor_torque * 2.0 * np.pi / 60.0
-        
-        turbine_input_power = turbine_rpm * turbine_torque * 2.0 * np.pi / 60.0
-        total_input_power += turbine_input_power
-        
-        outputs['power_loss'] = total_input_power - total_power
+        outputs['carrier_rpm'] = output_rpm
+        outputs['carrier_torque'] = output_torque
     
     def compute_partials(self, inputs, partials):
         nn = self.options['num_nodes']
@@ -237,53 +193,38 @@ class PlanetaryGearbox(ExplicitComponent):
         
         # Calculate partials for each motor
         for i in range(n_motors):
-            # ∂(output_rpm)/∂(motor_rpm) = alpha / (n_motors * motor_gear_ratio)
-            partials['shaft_out_rpm', f'motor{i+1}_rpm'] = alpha / (n_motors * motor_gear_ratio) * np.ones(nn)
+            # ∂(carrier_rpm)/∂(motor_rpm) = alpha / (n_motors * motor_gear_ratio)
+            partials['carrier_rpm', f'motor{i+1}_rpm'] = alpha / (n_motors * motor_gear_ratio) * np.eye(nn)
             
-            # ∂(output_rpm)/∂(motor_torque) = 0 (torque doesn't affect RPM in this model)
-            partials['shaft_out_rpm', f'motor{i+1}_torque'] = np.zeros(nn)
+            # ∂(carrier_rpm)/∂(motor_torque) = 0 (torque doesn't affect RPM in this model)
+            partials['carrier_rpm', f'motor{i+1}_torque'] = np.eye(nn)
             
-            # ∂(output_torque)/∂(motor_rpm) and ∂(output_torque)/∂(motor_torque) are complex
+            # ∂(carrier_torque)/∂(motor_rpm) and ∂(carrier_torque)/∂(motor_torque) are complex
             # For now, we'll use simplified partials
-            partials['shaft_out_torque', f'motor{i+1}_rpm'] = np.zeros(nn)
-            partials['shaft_out_torque', f'motor{i+1}_torque'] = np.zeros(nn)
+            partials['carrier_torque', f'motor{i+1}_rpm'] = np.eye(nn) * 0
+            partials['carrier_torque', f'motor{i+1}_torque'] = np.eye(nn) * 0
         
         # Gear ratio partials
-        # ∂(output_rpm)/∂(motor_gear_ratio) = -alpha * combined_motor_rpm / (motor_gear_ratio^2)
-        partials['shaft_out_rpm', 'motor_gear_ratio'] = -alpha * combined_motor_rpm / (motor_gear_ratio ** 2)
+        # ∂(carrier_rpm)/∂(motor_gear_ratio) = -alpha * combined_motor_rpm / (motor_gear_ratio^2)
+        partials['carrier_rpm', 'motor_gear_ratio'] = -alpha * combined_motor_rpm / (motor_gear_ratio ** 2)
         
-        # ∂(output_rpm)/∂(turbine_gear_ratio) = -(1-alpha) * turbine_rpm / (turbine_gear_ratio^2)
-        partials['shaft_out_rpm', 'turbine_gear_ratio'] = -(1.0 - alpha) * turbine_rpm / (turbine_gear_ratio ** 2)
+        # ∂(carrier_rpm)/∂(turbine_gear_ratio) = -(1-alpha) * turbine_rpm / (turbine_gear_ratio^2)
+        partials['carrier_rpm', 'turbine_gear_ratio'] = -(1.0 - alpha) * turbine_rpm / (turbine_gear_ratio ** 2)
         
         # Simplified torque partials for gear ratios
-        partials['shaft_out_torque', 'motor_gear_ratio'] = np.zeros(nn)
-        partials['shaft_out_torque', 'turbine_gear_ratio'] = np.zeros(nn)
+        partials['carrier_torque', 'motor_gear_ratio'] = np.zeros(nn) 
+        partials['carrier_torque', 'turbine_gear_ratio'] = np.zeros(nn) 
         
         # Turbine partials
-        # ∂(output_rpm)/∂(turbine_rpm) = (1-alpha) / turbine_gear_ratio
-        partials['shaft_out_rpm', 'turbine_rpm'] = (1.0 - alpha) / turbine_gear_ratio * np.ones(nn)
+        # ∂(carrier_rpm)/∂(turbine_rpm) = (1-alpha) / turbine_gear_ratio
+        partials['carrier_rpm', 'turbine_rpm'] = (1.0 - alpha) / turbine_gear_ratio * np.eye(nn)
         
-        # ∂(output_rpm)/∂(turbine_torque) = 0
-        partials['shaft_out_rpm', 'turbine_torque'] = np.zeros(nn)
+        # ∂(carrier_rpm)/∂(turbine_torque) = 0
+        partials['carrier_rpm', 'turbine_torque'] = np.eye(nn) * 0
         
         # Simplified torque partials for turbine
-        partials['shaft_out_torque', 'turbine_rpm'] = np.zeros(nn)
-        partials['shaft_out_torque', 'turbine_torque'] = np.zeros(nn)
-        
-        # Power loss partials
-        for i in range(n_motors):
-            motor_rpm = inputs[f'motor{i+1}_rpm']
-            motor_torque = inputs[f'motor{i+1}_torque']
-            
-            # ∂(power_loss)/∂(motor_rpm) = 2π * motor_torque / 60
-            partials['power_loss', f'motor{i+1}_rpm'] = 2.0 * np.pi * motor_torque / 60.0
-            
-            # ∂(power_loss)/∂(motor_torque) = 2π * motor_rpm / 60
-            partials['power_loss', f'motor{i+1}_torque'] = 2.0 * np.pi * motor_rpm / 60.0
-        
-        # Turbine power loss partials
-        partials['power_loss', 'turbine_rpm'] = 2.0 * np.pi * turbine_torque / 60.0
-        partials['power_loss', 'turbine_torque'] = 2.0 * np.pi * turbine_rpm / 60.0
+        partials['carrier_torque', 'turbine_rpm'] = np.eye(nn) * 0
+        partials['carrier_torque', 'turbine_torque'] = np.eye(nn) * 0
 
 
 class SimpleGearbox(ExplicitComponent):
@@ -337,16 +278,9 @@ class SimpleGearbox(ExplicitComponent):
                        desc='Output shaft RPM')
         self.add_output('shaft_out_torque', val=np.ones(nn) * 50.0, units='N*m',
                        desc='Output shaft torque')
-        self.add_output('power_loss', val=np.zeros(nn), units='W',
-                       desc='Power lost in the gearbox')
         
         # Declare partials
-        self.declare_partials('shaft_out_rpm', ['shaft_in_rpm', 'gear_ratio'],
-                            rows=np.arange(nn), cols=np.arange(nn))
-        self.declare_partials('shaft_out_torque', ['shaft_in_torque', 'gear_ratio'],
-                            rows=np.arange(nn), cols=np.arange(nn))
-        self.declare_partials('power_loss', ['shaft_in_rpm', 'shaft_in_torque'],
-                            rows=np.arange(nn), cols=np.arange(nn))
+        self.declare_partials('*', '*', method='exact')
     
     def compute(self, inputs, outputs):
         nn = self.options['num_nodes']
@@ -356,15 +290,11 @@ class SimpleGearbox(ExplicitComponent):
         torque_in = inputs['shaft_in_torque']
         gear_ratio = inputs['gear_ratio']
         
-        # Output RPM (directly proportional)
-        outputs['shaft_out_rpm'] = rpm_in * gear_ratio
+        # Output RPM (inversely proportional - gear ratio reduces RPM)
+        outputs['shaft_out_rpm'] = rpm_in / gear_ratio
         
-        # Output torque (inversely proportional, accounting for efficiency)
-        outputs['shaft_out_torque'] = torque_in * efficiency / gear_ratio
-        
-        # Power loss
-        power_in = 2.0 * np.pi * rpm_in * torque_in / 60.0
-        outputs['power_loss'] = power_in * (1.0 - efficiency)
+        # Output torque (directly proportional - gear ratio increases torque, accounting for efficiency)
+        outputs['shaft_out_torque'] = torque_in * gear_ratio * efficiency
     
     def compute_partials(self, inputs, partials):
         nn = self.options['num_nodes']
@@ -375,13 +305,111 @@ class SimpleGearbox(ExplicitComponent):
         gear_ratio = inputs['gear_ratio']
         
         # RPM partials
-        partials['shaft_out_rpm', 'shaft_in_rpm'] = gear_ratio * np.ones(nn)
-        partials['shaft_out_rpm', 'gear_ratio'] = rpm_in
+        partials['shaft_out_rpm', 'shaft_in_rpm'] = (1.0 / gear_ratio) * np.eye(nn)
+        partials['shaft_out_rpm', 'gear_ratio'] = -rpm_in / (gear_ratio ** 2)
         
         # Torque partials
-        partials['shaft_out_torque', 'shaft_in_torque'] = (efficiency / gear_ratio) * np.ones(nn)
-        partials['shaft_out_torque', 'gear_ratio'] = -torque_in * efficiency / (gear_ratio ** 2)
+        partials['shaft_out_torque', 'shaft_in_torque'] = (gear_ratio * efficiency) * np.eye(nn)
+        partials['shaft_out_torque', 'gear_ratio'] = torque_in * efficiency
+
+
+class CombinedGearboxGroup(Group):
+    """
+    A group that combines both simple and planetary gearbox components for testing.
+    
+    This group demonstrates how multiple gearbox types can be used together
+    in a larger propulsion system model.
+    
+    Parameters
+    ----------
+    num_nodes : int
+        Number of analysis points (default: 1)
+    n_motors : int
+        Number of motor input shafts for planetary gearbox (default: 2)
+    """
+    
+    def initialize(self):
+        self.options.declare('num_nodes', default=1, desc='Number of analysis points')
+        self.options.declare('n_motors', default=2, desc='Number of motor input shafts for planetary gearbox')
+    
+    def setup(self):
+        num_nodes = self.options['num_nodes']
+        n_motors = self.options['n_motors']
         
-        # Power loss partials
-        partials['power_loss', 'shaft_in_rpm'] = (1.0 - efficiency) * 2.0 * np.pi * torque_in / 60.0
-        partials['power_loss', 'shaft_in_torque'] = (1.0 - efficiency) * 2.0 * np.pi * rpm_in / 60.0
+        # Add the simple gearbox
+        self.add_subsystem('simple_gearbox', SimpleGearbox(num_nodes=num_nodes), promotes=['*'])
+        
+        # Add the planetary gearbox
+        self.add_subsystem('planetary_gearbox', PlanetaryGearbox(num_nodes=num_nodes, n_motors=n_motors), promotes=['*'])
+
+
+def test_gearbox_components():
+    """
+    Test both gearbox components in a combined group
+    """
+    import openmdao.api as om
+    
+    print("Testing combined gearbox group...")
+    
+    num_nodes = 5
+    
+    # Set up the OpenMDAO model
+    model = om.Group()
+    ivc = om.IndepVarComp()
+    
+    # Add independent variables for simple gearbox
+    ivc.add_output('shaft_in_rpm', 3000 * np.ones(num_nodes), units='rpm', desc='Input shaft RPM')
+    ivc.add_output('shaft_in_torque', 200 * np.ones(num_nodes), units='N*m', desc='Input shaft torque')
+    ivc.add_output('gear_ratio', 2.5, units=None, desc='Gear ratio')
+    
+    # Add independent variables for planetary gearbox
+    ivc.add_output('motor1_rpm', 5000 * np.ones(num_nodes), units='rpm', desc='Motor 1 RPM')
+    ivc.add_output('motor1_torque', 150 * np.ones(num_nodes), units='N*m', desc='Motor 1 torque')
+    ivc.add_output('motor2_rpm', 4800 * np.ones(num_nodes), units='rpm', desc='Motor 2 RPM')
+    ivc.add_output('motor2_torque', 120 * np.ones(num_nodes), units='N*m', desc='Motor 2 torque')
+    ivc.add_output('motor_gear_ratio', 3.0, units=None, desc='Motor gear ratio')
+    ivc.add_output('turbine_rpm', 45000 * np.ones(num_nodes), units='rpm', desc='Turbine RPM')
+    ivc.add_output('turbine_torque', 80 * np.ones(num_nodes), units='N*m', desc='Turbine torque')
+    ivc.add_output('turbine_gear_ratio', 20.0, units=None, desc='Turbine gear ratio')
+    
+    model.add_subsystem('ivc', ivc, promotes=['*'])
+    model.add_subsystem('gearbox_group', CombinedGearboxGroup(num_nodes=num_nodes, n_motors=2), promotes=['*'])
+    
+    prob = om.Problem(model, reports=False)
+    prob.setup()
+    #om.n2(prob)
+    prob.run_model()
+    
+    # Get results for simple gearbox
+    simple_shaft_out_rpm = prob.get_val('shaft_out_rpm', units='rpm')
+    simple_shaft_out_torque = prob.get_val('shaft_out_torque', units='N*m')
+    
+    print(f"Combined Gearbox Group Results for {num_nodes} nodes:")
+    print(f"\nSimple Gearbox:")
+    print(f"  Input RPM: {prob.get_val('shaft_in_rpm', units='rpm')}")
+    print(f"  Input Torque: {prob.get_val('shaft_in_torque', units='N*m')}")
+    print(f"  Gear Ratio: {prob.get_val('gear_ratio')}")
+    print(f"  Output RPM: {simple_shaft_out_rpm}")
+    print(f"  Output Torque: {simple_shaft_out_torque}")
+    
+    print(f"\nPlanetary Gearbox:")
+    print(f"  Motor 1 RPM: {prob.get_val('motor1_rpm', units='rpm')}")
+    print(f"  Motor 1 Torque: {prob.get_val('motor1_torque', units='N*m')}")
+    print(f"  Motor 2 RPM: {prob.get_val('motor2_rpm', units='rpm')}")
+    print(f"  Motor 2 Torque: {prob.get_val('motor2_torque', units='N*m')}")
+    print(f"  Motor Gear Ratio: {prob.get_val('motor_gear_ratio')}")
+    print(f"  Turbine RPM: {prob.get_val('turbine_rpm', units='rpm')}")
+    print(f"  Turbine Torque: {prob.get_val('turbine_torque', units='N*m')}")
+    print(f"  Turbine Gear Ratio: {prob.get_val('turbine_gear_ratio')}")
+    print(f"  Carrier RPM: {prob.get_val('carrier_rpm', units='rpm')}")
+    print(f"  Carrier Torque: {prob.get_val('carrier_torque', units='N*m')}")
+    
+    # Check partials for the entire group
+    print("\nChecking combined gearbox group partials...")
+    prob.check_partials(compact_print=True)
+    
+    return (simple_shaft_out_rpm, simple_shaft_out_torque)
+
+
+if __name__ == "__main__":
+    test_gearbox_components()

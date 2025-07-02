@@ -46,9 +46,9 @@ class PropellerData:
             df = pd.read_excel(prop_filename, sheet_name=sheet_name)
             
             # Drop any rows with NaN values
-            print(f"Original dataframe shape: {df.shape}")
+            #print(f"Original dataframe shape: {df.shape}")
             df = df.dropna()
-            print(f"Dataframe shape after dropping NaNs: {df.shape}")
+            #print(f"Dataframe shape after dropping NaNs: {df.shape}")
             
             # Define your input columns
             #df['SHP'] = df['SHP'].astype(float)
@@ -59,9 +59,9 @@ class PropellerData:
 
             # Find all rows where the input combination is duplicated (singular points)
             df.drop_duplicates(subset=input_cols, keep='first')
-            print(f"Dataframe shape after dropping duplicates: {df.shape}")
-            
-            print(df)
+            #print(f"Dataframe shape after dropping duplicates: {df.shape}")
+        
+            #print(df)
             
             # Drop values at 0 throttle 
             df = df[df['SHP'] != 0]
@@ -129,8 +129,8 @@ class PropellerData:
             cls.dyn_ktas_data__kts = ktas_data__kts[dyn_inds]
             
             print(f"Propeller data loaded successfully!")
-            print(f"Static data points: {len(cls.stat_thrust_data__N)}")
-            print(f"Dynamic data points: {len(cls.dyn_thrust_data__N)}")
+            #print(f"Static data points: {len(cls.stat_thrust_data__N)}")
+            #print(f"Dynamic data points: {len(cls.dyn_thrust_data__N)}")
     
     @classmethod
     def get_data(cls, prop_filename, sheet_name='data'):

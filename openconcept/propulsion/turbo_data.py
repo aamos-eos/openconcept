@@ -74,6 +74,8 @@ class TurboData:
             # Convert to SI units
             cls.stat_power_data__W = cls.stat_power_data__kW * 1000
             cls.dyn_power_data__W = cls.dyn_power_data__kW * 1000
+
+            print("Turbine data loaded successfully!")
     
     @classmethod
     def get_data(cls, turbo_filename, sheet_name='CRZ'):

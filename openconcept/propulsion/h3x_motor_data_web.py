@@ -1,7 +1,7 @@
 import pandas as pd
 import numpy as np
 
-class MotorDataGraphEff:
+class MotorDataEffMap:
     """Global data store for motor training data from H3X_HPDM_2300_eff.xlsx - loads once, accessible everywhere"""
     rpm_data = None
     torque_data = None
@@ -16,9 +16,9 @@ class MotorDataGraphEff:
             df = pd.read_excel(motor_filename)
             
             # Drop any rows with NaN values
-            print(f"Original dataframe shape: {df.shape}")
+            #print(f"Original dataframe shape: {df.shape}")
             df = df.dropna()
-            print(f"Dataframe shape after dropping NaNs: {df.shape}")
+            #print(f"Dataframe shape after dropping NaNs: {df.shape}")
             
             # Assign data from columns (adjust column indices based on your Excel structure)
             cls.rpm_data = df['RPM'].values
@@ -32,10 +32,10 @@ class MotorDataGraphEff:
             dupe_input_mask = df.duplicated(subset=input_cols, keep='first')
             
             # Show all rows with duplicate input points
-            print(df[dupe_input_mask])
-            print(f"Number of singular (duplicate input) points: {dupe_input_mask.sum()}")
+            #print(df[dupe_input_mask])
+            #print(f"Number of singular (duplicate input) points: {dupe_input_mask.sum()}")
             
-            print("Motor data from H3X_HPDM_2300_eff.xlsx loaded successfully!")
+            print("Motor data loaded successfully!")
     
     @classmethod
     def get_data(cls, motor_filename='openconcept/propulsion/empirical_data/H3X_HPDM_2300_eff.xlsx'):
@@ -45,7 +45,7 @@ class MotorDataGraphEff:
         return cls
 
 
-class MotorDataGraphVolts:
+class MotorDataPowerVoltCurve:
     """Global data store for motor training data from H3X_HPDM_2300_volts.xlsx - loads once, accessible everywhere"""
     voltage_data = None
     power_data = None
@@ -59,9 +59,9 @@ class MotorDataGraphVolts:
             df = pd.read_excel(motor_filename)
             
             # Drop any rows with NaN values
-            print(f"Original dataframe shape: {df.shape}")
+            #print(f"Original dataframe shape: {df.shape}")
             df = df.dropna()
-            print(f"Dataframe shape after dropping NaNs: {df.shape}")
+            #print(f"Dataframe shape after dropping NaNs: {df.shape}")
 
             # Assign data from columns (adjust column indices based on your Excel structure)
             cls.voltage_data = df['Voltage'].values
@@ -75,10 +75,10 @@ class MotorDataGraphVolts:
             dupe_input_mask = df.duplicated(subset=input_cols, keep='first')
             
             # Show all rows with duplicate input points
-            print(df[dupe_input_mask])
-            print(f"Number of singular (duplicate input) points: {dupe_input_mask.sum()}")
+            #print(df[dupe_input_mask])
+            #print(f"Number of singular (duplicate input) points: {dupe_input_mask.sum()}")
             
-            print("Motor data from H3X_HPDM_2300_volts.xlsx loaded successfully!")
+            print("Motor data loaded successfully!")
     
     @classmethod
     def get_data(cls, motor_filename='openconcept/propulsion/empirical_data/H3X_HPDM_2300_volts.xlsx'):

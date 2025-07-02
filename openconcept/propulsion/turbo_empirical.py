@@ -38,7 +38,7 @@ class EmpiricalDynamicTurbo(om.Group):
         dyn_turbo_interp = om.MetaModelUnStructuredComp(vec_size=num_nodes, default_surrogate=om.ResponseSurface())
         
         # set up inputs and outputs with vectorization using global data
-        dyn_turbo_interp.add_input('disa', 1.0, training_data=TurboData.dyn_disa_data__degC, units=None, shape=(num_nodes,))
+        dyn_turbo_interp.add_input('fltcond|disa', 1.0, training_data=TurboData.dyn_disa_data__degC, units=None, shape=(num_nodes,))
         dyn_turbo_interp.add_input('fltcond|h', 1.0, training_data=TurboData.dyn_alt_data__m, units="m", shape=(num_nodes,))
         dyn_turbo_interp.add_input('fltcond|M', 1.0, training_data=TurboData.dyn_mach_data, units=None, shape=(num_nodes,))
         dyn_turbo_interp.add_input('frac', 1.0, training_data=TurboData.dyn_frac_data, units=None, shape=(num_nodes,))
@@ -65,7 +65,7 @@ class EmpiricalStaticTurbo(om.Group):
         stat_turbo_interp = om.MetaModelUnStructuredComp(vec_size=num_nodes, default_surrogate=om.ResponseSurface())
         
         # set up inputs and outputs with vectorization using global data
-        stat_turbo_interp.add_input('disa', 1.0, training_data=TurboData.stat_disa_data__degC, units=None, shape=(num_nodes,))
+        stat_turbo_interp.add_input('fltcond|disa', 1.0, training_data=TurboData.stat_disa_data__degC, units=None, shape=(num_nodes,))
         stat_turbo_interp.add_input('fltcond|h', 1.0, training_data=TurboData.stat_alt_data__m, units="m", shape=(num_nodes,))
         stat_turbo_interp.add_input('fltcond|M', 1.0, training_data=TurboData.stat_mach_data, units=None, shape=(num_nodes,))
         stat_turbo_interp.add_input('frac', 1.0, training_data=TurboData.stat_frac_data, units=None, shape=(num_nodes,))
@@ -102,7 +102,7 @@ def test_interpolation_accuracy():
     # Add independent variables with the randomly sampled data points
     ivc.add_output('fltcond|h', turbo_data.dyn_alt_data__m[test_indices], units='m', desc='Altitude in meters')
     ivc.add_output('fltcond|M', turbo_data.dyn_mach_data[test_indices], desc='Mach number')
-    ivc.add_output('disa', turbo_data.dyn_disa_data__degC[test_indices], desc='DISA in degrees Celsius')
+    ivc.add_output('fltcond|disa', turbo_data.dyn_disa_data__degC[test_indices], desc='DISA in degrees Celsius')
     ivc.add_output('frac', turbo_data.dyn_frac_data[test_indices], desc='Throttle fraction')
     
     model.add_subsystem('ivc', ivc, promotes=['*'])
@@ -181,7 +181,7 @@ if __name__ == "__main__":
     # Add independent variables with vectorization
     ivc.add_output('fltcond|h', 10000*0.3048 * np.ones(num_nodes), units='m', desc='Altitude in meters')
     ivc.add_output('fltcond|M', 0.01 * np.ones(num_nodes), desc='Mach number')
-    ivc.add_output('disa', 20 * np.ones(num_nodes), desc='DISA in degrees Celsius')
+    ivc.add_output('fltcond|disa', 20 * np.ones(num_nodes), desc='DISA in degrees Celsius')
     ivc.add_output('frac', 0.6 * np.ones(num_nodes), desc='Throttle fraction')
     
     model.add_subsystem('ivc', ivc, promotes=['*'])
@@ -194,7 +194,7 @@ if __name__ == "__main__":
     # Now test out a 'fuzzy' XOR
     prob.set_val('fltcond|h', 10000*0.3048 * np.ones(num_nodes))
     prob.set_val('fltcond|M', 0.01 * np.ones(num_nodes))
-    prob.set_val('disa', 20 * np.ones(num_nodes))
+    prob.set_val('fltcond|disa', 20 * np.ones(num_nodes))
     prob.set_val('frac', 0.6 * np.ones(num_nodes))
     
     prob.run_model()

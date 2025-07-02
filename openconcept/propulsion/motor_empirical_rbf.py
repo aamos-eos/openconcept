@@ -13,8 +13,9 @@ import json
 import os, sys
 
 # Import the global data store
-from openconcept.propulsion.motor_data_graph import MotorDataGraphEff
-from openconcept.propulsion.motor_data_graph import MotorDataGraphVolts
+from openconcept.propulsion.h3x_motor_data_web import MotorDataEffMap # Torque to efficiency lookup table
+from openconcept.propulsion.h3x_motor_data_web import MotorDataPowerVoltCurve # Power to voltage lookup table
+from openconcept.propulsion.h3x_motor_data_rfi import MotorDataPowerEffCurve # Power to efficiency lookup table
 
 
 
@@ -33,9 +34,9 @@ class MotorEfficiencyRBFInterpolator(om.ExplicitComponent):
         self.add_output('eff', units=None, shape=(num_nodes,), desc='Motor efficiency')
         
         # Create the RBF interpolator using the global data
-        rpm_data = MotorDataGraphEff.rpm_data
-        torque_data = MotorDataGraphEff.torque_data
-        eff_data = MotorDataGraphEff.eff_data
+        rpm_data = MotorDataEffMap.rpm_data
+        torque_data = MotorDataEffMap.torque_data
+        eff_data = MotorDataEffMap.eff_data
         
         # Create training points for RBF
         training_points = np.column_stack([rpm_data, torque_data])
@@ -71,9 +72,9 @@ class MotorVoltagePowerRBFInterpolator(om.ExplicitComponent):
         self.add_output('mech_power_lim', units='kW', shape=(num_nodes,), desc='Mechanical power limit')
         
         # Create the RBF interpolator using the global data
-        rpm_data = MotorDataGraphVolts.rpm_data
-        voltage_data = MotorDataGraphVolts.voltage_data
-        power_data = MotorDataGraphVolts.power_data
+        rpm_data = MotorDataPowerVoltCurve.rpm_data
+        voltage_data = MotorDataPowerVoltCurve.voltage_data
+        power_data = MotorDataPowerVoltCurve.power_data
         
         # Create training points for RBF
         training_points = np.column_stack([rpm_data, voltage_data])
@@ -94,6 +95,46 @@ class MotorVoltagePowerRBFInterpolator(om.ExplicitComponent):
         outputs['mech_power_lim'] = mech_power_lim
 
 
+class MotorPowerEfficiencyRBFInterpolator(om.ExplicitComponent):
+    """
+    Explicit component for 2D interpolation of Voltage + Power to Efficiency using RBF
+    """
+    def initialize(self):
+        self.options.declare('num_nodes', default=1, desc='number of nodes to evaluate')
+
+    def setup(self):
+        num_nodes = self.options['num_nodes']
+        
+        self.add_input('voltage', units='V', shape=(num_nodes,), desc='Motor voltage')
+        self.add_input('mech_power', units='W', shape=(num_nodes,), desc='Motor power')
+        self.add_output('eff', units=None, shape=(num_nodes,), desc='Motor efficiency')
+        
+        # Create the RBF interpolator using the global data
+        # Note: This assumes you have voltage, power, and efficiency data available
+        # You may need to adjust the data source based on your available datasets
+        voltage_data = MotorDataPowerEffCurve.voltage_data
+        power_data = MotorDataPowerEffCurve.power_data__W
+        eff_data = MotorDataPowerEffCurve.eff_data
+        
+        # Create training points for RBF
+        training_points = np.column_stack([voltage_data, power_data])
+        self.rbf_interpolator = RBFInterpolator(training_points, eff_data, kernel='thin_plate_spline')
+        
+        self.declare_partials('*', '*', method='cs')
+
+    def compute(self, inputs, outputs):
+        voltage = inputs['voltage']
+        power = inputs['mech_power']
+        
+        # Create test points for interpolation
+        test_points = np.column_stack([voltage, power])
+        
+        # Interpolate efficiency
+        eff = self.rbf_interpolator(test_points)
+        
+        outputs['eff'] = eff
+
+
 def test_interpolation_accuracy():
     """
     Test interpolation accuracy by comparing interpolated vs actual values
@@ -104,7 +145,7 @@ def test_interpolation_accuracy():
     print("\n=== Testing Efficiency Interpolation ===")
     
     # Get the efficiency data
-    motor_eff_data = MotorDataGraphEff.get_data(motor_filename='openconcept/propulsion/empirical_data/H3X_HPDM_2300_eff.xlsx')
+    motor_eff_data = MotorDataEffMap.get_data(motor_filename='openconcept/propulsion/empirical_data/H3X_HPDM_2300_eff.xlsx')
     
     # Use actual data points for testing
     n_test_points = min(20, len(motor_eff_data.rpm_data))  # Test up to 20 points
@@ -158,7 +199,7 @@ def test_interpolation_accuracy():
     print("\n=== Testing Voltage/Power Limit Interpolation ===")
     
     # Get the voltage data
-    motor_volts_data = MotorDataGraphVolts.get_data(motor_filename='openconcept/propulsion/empirical_data/H3X_HPDM_2300_volts.xlsx')
+    motor_volts_data = MotorDataPowerVoltCurve.get_data(motor_filename='openconcept/propulsion/empirical_data/H3X_HPDM_2300_volts.xlsx')
     
     # Use actual data points for testing
     n_test_points_volts = min(20, len(motor_volts_data.rpm_data))  # Test up to 20 points
@@ -209,11 +250,66 @@ def test_interpolation_accuracy():
     print(f"Mean relative error: {np.mean(power_relative_errors):.2f}%")
     print(f"Max relative error: {np.max(power_relative_errors):.2f}%")
     
+    # Test 3: Power to Efficiency Interpolation
+    print("\n=== Testing Power to Efficiency Interpolation ===")
+    
+    # Get the power to efficiency data
+    motor_power_eff_data = MotorDataPowerEffCurve.get_data(motor_filename='openconcept/propulsion/empirical_data/H3X_HPDM-XXXX_1MW.xlsx')
+    
+    # Use actual data points for testing
+    n_test_points_power_eff = min(20, len(motor_power_eff_data.voltage_data))  # Test up to 20 points
+    
+    # Generate random indices for power to efficiency test
+    np.random.seed(456)  # Different seed for different test points
+    test_indices_power_eff = np.random.choice(len(motor_power_eff_data.voltage_data), n_test_points_power_eff, replace=False)
+    
+    print(f"Testing power to efficiency interpolation with {n_test_points_power_eff} actual data points...")
+    
+    # Set up the model for power to efficiency interpolation
+    model3 = om.Group()
+    ivc3 = om.IndepVarComp()
+    
+    # Use actual data values
+    test_voltage_power_eff = motor_power_eff_data.voltage_data[test_indices_power_eff]
+    test_power_power_eff = motor_power_eff_data.power_data__W[test_indices_power_eff]
+    actual_eff_power_eff = motor_power_eff_data.eff_data[test_indices_power_eff]
+    
+    ivc3.add_output('voltage', test_voltage_power_eff, units='V', desc='Motor voltage')
+    ivc3.add_output('mech_power', test_power_power_eff, units='W', desc='Motor power')
+    
+    model3.add_subsystem('ivc', ivc3, promotes=['*'])
+    
+    # Add power to efficiency interpolation component
+    motor_power_eff_interp = MotorPowerEfficiencyRBFInterpolator(num_nodes=n_test_points_power_eff)
+    
+    model3.add_subsystem('motor_power_eff_interp', motor_power_eff_interp, promotes=['*'])
+    
+    prob3 = om.Problem(model3, reports=False)
+    prob3.setup()
+    prob3.run_model()
+    
+    # Get interpolated efficiency values
+    interpolated_eff_power_eff = prob3.get_val('eff')
+    
+    # Calculate errors
+    eff_power_eff_errors = np.abs(interpolated_eff_power_eff - actual_eff_power_eff)
+    eff_power_eff_relative_errors = eff_power_eff_errors / actual_eff_power_eff * 100
+    
+    print(f"Power to Efficiency Interpolation Results:")
+    print(f"Voltage range: {test_voltage_power_eff.min():.0f} - {test_voltage_power_eff.max():.0f} V")
+    print(f"Power range: {test_power_power_eff.min():.1f} - {test_power_power_eff.max():.1f} W")
+    print(f"Actual efficiency range: {actual_eff_power_eff.min():.3f} - {actual_eff_power_eff.max():.3f}")
+    print(f"Interpolated efficiency range: {interpolated_eff_power_eff.min():.3f} - {interpolated_eff_power_eff.max():.3f}")
+    print(f"Mean absolute error: {np.mean(eff_power_eff_errors):.6f}")
+    print(f"Max absolute error: {np.max(eff_power_eff_errors):.6f}")
+    print(f"Mean relative error: {np.mean(eff_power_eff_relative_errors):.2f}%")
+    print(f"Max relative error: {np.max(eff_power_eff_relative_errors):.2f}%")
+    
     # Create comparison plots
-    plt.figure(figsize=(15, 10))
+    plt.figure(figsize=(15, 15))
     
     # Efficiency interpolation plots
-    plt.subplot(2, 3, 1)
+    plt.subplot(3, 3, 1)
     plt.scatter(actual_eff, interpolated_eff, alpha=0.6, s=20)
     plt.plot([actual_eff.min(), actual_eff.max()], [actual_eff.min(), actual_eff.max()], 'r--', linewidth=2)
     plt.xlabel('Actual Efficiency')
@@ -221,14 +317,14 @@ def test_interpolation_accuracy():
     plt.title('Efficiency: Actual vs Interpolated')
     plt.grid(True, alpha=0.3)
     
-    plt.subplot(2, 3, 2)
+    plt.subplot(3, 3, 2)
     plt.hist(eff_errors, bins=15, alpha=0.7, edgecolor='black')
     plt.xlabel('Absolute Error')
     plt.ylabel('Frequency')
     plt.title('Efficiency Error Distribution')
     plt.grid(True, alpha=0.3)
     
-    plt.subplot(2, 3, 3)
+    plt.subplot(3, 3, 3)
     plt.scatter(actual_eff, eff_relative_errors, alpha=0.6, s=20)
     plt.xlabel('Actual Efficiency')
     plt.ylabel('Relative Error (%)')
@@ -236,7 +332,7 @@ def test_interpolation_accuracy():
     plt.grid(True, alpha=0.3)
     
     # Voltage/power interpolation plots
-    plt.subplot(2, 3, 4)
+    plt.subplot(3, 3, 4)
     plt.scatter(actual_power_lim, interpolated_power_lim, alpha=0.6, s=20)
     plt.plot([actual_power_lim.min(), actual_power_lim.max()], [actual_power_lim.min(), actual_power_lim.max()], 'r--', linewidth=2)
     plt.xlabel('Actual Power Limit (kW)')
@@ -244,25 +340,49 @@ def test_interpolation_accuracy():
     plt.title('Power Limit: Actual vs Interpolated')
     plt.grid(True, alpha=0.3)
     
-    plt.subplot(2, 3, 5)
+    plt.subplot(3, 3, 5)
     plt.hist(power_errors, bins=15, alpha=0.7, edgecolor='black')
     plt.xlabel('Absolute Error (kW)')
     plt.ylabel('Frequency')
     plt.title('Power Limit Error Distribution')
     plt.grid(True, alpha=0.3)
     
-    plt.subplot(2, 3, 6)
+    plt.subplot(3, 3, 6)
     plt.scatter(actual_power_lim, power_relative_errors, alpha=0.6, s=20)
     plt.xlabel('Actual Power Limit (kW)')
     plt.ylabel('Relative Error (%)')
     plt.title('Power Limit Error vs Actual Value')
     plt.grid(True, alpha=0.3)
     
+    # Power to Efficiency interpolation plots
+    plt.subplot(3, 3, 7)
+    plt.scatter(actual_eff_power_eff, interpolated_eff_power_eff, alpha=0.6, s=20)
+    plt.plot([actual_eff_power_eff.min(), actual_eff_power_eff.max()], [actual_eff_power_eff.min(), actual_eff_power_eff.max()], 'r--', linewidth=2)
+    plt.xlabel('Actual Efficiency')
+    plt.ylabel('Interpolated Efficiency')
+    plt.title('Power to Efficiency: Actual vs Interpolated')
+    plt.grid(True, alpha=0.3)
+    
+    plt.subplot(3, 3, 8)
+    plt.hist(eff_power_eff_errors, bins=15, alpha=0.7, edgecolor='black')
+    plt.xlabel('Absolute Error')
+    plt.ylabel('Frequency')
+    plt.title('Power to Efficiency Error Distribution')
+    plt.grid(True, alpha=0.3)
+    
+    plt.subplot(3, 3, 9)
+    plt.scatter(actual_eff_power_eff, eff_power_eff_relative_errors, alpha=0.6, s=20)
+    plt.xlabel('Actual Efficiency')
+    plt.ylabel('Relative Error (%)')
+    plt.title('Power to Efficiency Error vs Actual Value')
+    plt.grid(True, alpha=0.3)
+    
     plt.tight_layout()
     plt.show()
     
     return (interpolated_eff, actual_eff, eff_errors, eff_relative_errors,
-            interpolated_power_lim, actual_power_lim, power_errors, power_relative_errors)
+            interpolated_power_lim, actual_power_lim, power_errors, power_relative_errors,
+            interpolated_eff_power_eff, actual_eff_power_eff, eff_power_eff_errors, eff_power_eff_relative_errors)
 
 
 class ComputeMotorPower(om.ExplicitComponent):
@@ -415,18 +535,28 @@ class EmpiricalMotor(om.Group):
     
     def initialize(self):
         self.options.declare('num_nodes', default=1, desc='number of nodes to evaluate')
+        self.options.declare('mode', default='power_in', desc='motor component solving mode. power_in or torque_speed_in')
         
         # Load motor data
-        MotorDataGraphEff.load_data(motor_filename='openconcept/propulsion/empirical_data/H3X_HPDM_2300_eff.xlsx')
-        MotorDataGraphVolts.load_data(motor_filename='openconcept/propulsion/empirical_data/H3X_HPDM_2300_volts.xlsx')
+        MotorDataEffMap.load_data(motor_filename='openconcept/propulsion/empirical_data/H3X_HPDM_2300_eff.xlsx')
+        MotorDataPowerVoltCurve.load_data(motor_filename='openconcept/propulsion/empirical_data/H3X_HPDM_2300_volts.xlsx')
+        MotorDataPowerEffCurve.load_data(motor_filename='openconcept/propulsion/empirical_data/H3X_HPDM-XXXX_1MW.xlsx')
     
     def setup(self):
         num_nodes = self.options['num_nodes']    
 
         # Add all subsystems
-        self.add_subsystem('motor_voltage_interp', MotorVoltagePowerRBFInterpolator(num_nodes=num_nodes), promotes=['*'])
-        self.add_subsystem('compute_power', ComputeMotorPower(num_nodes=num_nodes), promotes=['*'])
-        self.add_subsystem('motor_eff_interp', MotorEfficiencyRBFInterpolator(num_nodes=num_nodes), promotes=['*'])
+        if self.options['mode'] == 'torque_speed_in':
+            self.add_subsystem('motor_voltage_interp', MotorVoltagePowerRBFInterpolator(num_nodes=num_nodes), promotes=['*'])
+            self.add_subsystem('compute_power', ComputeMotorPower(num_nodes=num_nodes), promotes=['*'])
+            self.add_subsystem('motor_eff_interp', MotorEfficiencyRBFInterpolator(num_nodes=num_nodes), promotes=['*'])
+        elif self.options['mode'] == 'power_in':
+            self.add_subsystem('motor_power_interp', MotorPowerEfficiencyRBFInterpolator(num_nodes=num_nodes), promotes=['*'])
+        else:
+            raise ValueError(f"Invalid mode: {self.options['mode']}")
+        # end 
+
+        # Add the electrical power computation
         self.add_subsystem('compute_elec', ComputeMotorElecDraw(num_nodes=num_nodes), promotes=['*'])
         
 
@@ -443,11 +573,17 @@ def test_motor_components():
     # Set up the OpenMDAO model
     model = om.Group()
     ivc = om.IndepVarComp()
+
+    mode = 'power_in'
+    ivc.add_output('voltage', 700 * np.ones(num_nodes), units='V', desc='Motor voltage')
     
     # Add independent variables
-    ivc.add_output('torque_cmd', 5000 * np.ones(num_nodes), units='N*m', desc='Commanded torque')
-    ivc.add_output('rpm', 1500 * np.ones(num_nodes), units='rpm', desc='Motor speed')
-    ivc.add_output('voltage', 700 * np.ones(num_nodes), units='V', desc='Motor voltage')
+    if mode == 'torque_speed_in':
+        ivc.add_output('torque_cmd', 5000 * np.ones(num_nodes), units='N*m', desc='Commanded torque')
+        ivc.add_output('rpm', 1500 * np.ones(num_nodes), units='rpm', desc='Motor speed')
+    elif mode == 'power_in':
+        ivc.add_output('mech_power', 1000 * np.ones(num_nodes), units='kW', desc='Commanded power')
+
     
     model.add_subsystem('ivc', ivc, promotes=['*'])
     model.add_subsystem('motor', EmpiricalMotor(num_nodes=num_nodes), promotes=['*'])
@@ -461,17 +597,17 @@ def test_motor_components():
     
     # Get results
     mech_power = prob.get_val('mech_power', units='W')
-    torque = prob.get_val('torque', units='N*m')
     elec_power = prob.get_val('elec_power', units='W')
     eff = prob.get_val('eff')
-    mech_power_lim = prob.get_val('mech_power_lim', units='kW')
     
     print(f"Results for {num_nodes} nodes:")
-    print(f"Commanded torque: {prob.get_val('torque_cmd', units='N*m')}")
-    print(f"RPM: {prob.get_val('rpm', units='rpm')}")
-    print(f"Voltage: {prob.get_val('voltage', units='V')}")
-    print(f"Power limit: {mech_power_lim} kW")
-    print(f"Actual torque: {torque} N*m")
+    if mode == 'torque_speed_in':
+        print(f"Commanded torque: {prob.get_val('torque_cmd', units='N*m')}")
+        print(f"RPM: {prob.get_val('rpm', units='rpm')}")
+        print(f"Voltage: {prob.get_val('voltage', units='V')}")
+    elif mode == 'power_in':
+        print(f"Commanded power: {prob.get_val('mech_power', units='kW')}")
+
     print(f"Mechanical power: {mech_power} W")
     print(f"Efficiency: {eff}")
     print(f"Electrical power: {elec_power} W")
@@ -480,13 +616,12 @@ def test_motor_components():
     print("\nChecking partials...")
     prob.check_partials(compact_print=True)
     
-    return mech_power, torque, elec_power, eff
 
 
 if __name__ == "__main__":
     
     # Test interpolation accuracy (now includes both efficiency and voltage/power tests)
-    #test_interpolation_accuracy()
+    test_interpolation_accuracy()
 
     # Test motor components
     test_motor_components()

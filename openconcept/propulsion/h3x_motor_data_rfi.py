@@ -1,7 +1,7 @@
 import pandas as pd
 import numpy as np
 
-class MotorData:
+class MotorDataPowerEffCurve:
     """Global data store for motor training data - loads once, accessible everywhere"""
     voltage_data = None
     power_data__W = None
@@ -15,27 +15,27 @@ class MotorData:
             df = pd.read_excel(motor_filename)
             
             # Drop any rows with NaN values
-            print(f"Original dataframe shape: {df.shape}")
+            #print(f"Original dataframe shape: {df.shape}")
             df = df.dropna()
-            print(f"Dataframe shape after dropping NaNs: {df.shape}")
+            #print(f"Dataframe shape after dropping NaNs: {df.shape}")
             
             # Assign data from columns
-            cls.voltage_data = df.iloc[:, 0].values
-            power_data__kW = df.iloc[:, 2].values
-            cls.eff_data = df.iloc[:, 3].values
+            cls.voltage_data = df['Voltage'].values
+            power_data__kW = df['power_kW_2MW_option'].values
+            cls.eff_data = df['eff'].values 
             
             # Convert to SI units
             cls.power_data__W = power_data__kW * 1000
             
             # Define your input columns
-            input_cols = ['Voltage','power_kW','eff']  # replace with your actual input columns
+            input_cols = ['Voltage','power_kW_2MW_option','eff']  # replace with your actual input columns
             
             # Find all rows where the input combination is duplicated (singular points)
             dupe_input_mask = df.duplicated(subset=input_cols, keep='first')
             
             # Show all rows with duplicate input points
-            print(df[dupe_input_mask])
-            print(f"Number of singular (duplicate input) points: {dupe_input_mask.sum()}")
+            #print(df[dupe_input_mask])
+            #print(f"Number of singular (duplicate input) points: {dupe_input_mask.sum()}")
             
             print("Motor data loaded successfully!")
     

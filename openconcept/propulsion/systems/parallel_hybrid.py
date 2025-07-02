@@ -1,13 +1,14 @@
 from openconcept.propulsion import SimpleMotor, PowerSplitNacelle, SimpleGenerator, SimpleTurboshaft, SimplePropeller
 from openconcept.energy_storage import SimpleBattery, SOCBattery
 from openconcept.utilities import DVLabel, AddSubtractComp, ElementMultiplyDivideComp
-from openconcept.propulsion import EmpiricalMotor, EmpiricalPropeller, EmpiricalDynamicTurbo, EmpiricalStaticTurbo, DischargeEmpiricalBattery, ChargeEmpiricalBattery
-
+from openconcept.propulsion import  EmpiricalPropeller, EmpiricalDynamicTurbo, EmpiricalStaticTurbo, DischargeEmpiricalBattery, ChargeEmpiricalBattery
+from openconcept.propulsion.motor_empirical_rbf import EmpiricalMotor
 
 
 from openmdao.api import Group, BalanceComp, IndepVarComp, n2
 import numpy as np
 from openconcept.propulsion.battery_data import BatteryData
+from openconcept.propulsion.gearbox_analytical import SimpleGearbox, PlanetaryGearbox
 
 # Load data immediately when module is imported - this ensures it's available for all components
 BatteryData.load_data(bat_filename='openconcept/propulsion/empirical_data/inHouse_battery_1motorConfig_208s27p_4grp_to_each_nacelle.xlsx', 
@@ -36,12 +37,21 @@ class ParallelHybridNacelle(Group):
 
 
         for i in range(nm):
-            self.add_subsystem(f"motor{i+1}", EmpiricalMotor(num_nodes=nn), promotes_inputs=["throttle"])
+            self.add_subsystem(f"motor{i+1}", EmpiricalMotor(num_nodes=nn), promotes_inputs=[])
         # end
-        self.add_subsystem("turb", EmpiricalDynamicTurbo(num_nodes=nn), promotes_outputs=["fuel_flow"])
+
+        # Gas Turbine Gearbox
+        self.add_subsystem('turbo_gearbox', SimpleGearbox(num_nodes=nn), promotes=[])
+
+
+
+        # Planetary Gearbox for turbine and motor combination
+        self.add_subsystem('planetary_gearbox', PlanetaryGearbox(num_nodes=nn, n_motors=nm), promotes=['motor_gear_ratio','turbine_gear_ratio'])
+
+        self.add_subsystem("turb", EmpiricalDynamicTurbo(num_nodes=nn), promotes_outputs=[], promotes_inputs=["fltcond|*"])
         self.add_subsystem("prop", EmpiricalPropeller(num_nodes=nn,
-                                                      known_thrust = True,
-                                                      known_power = False,
+                                                      known_thrust = False,
+                                                      known_power = True,
                                                       known_rpm = True, 
                                                       use_dynamic_data = True), promotes_inputs=["fltcond|*"])
 
@@ -108,6 +118,25 @@ class QuadParallelHybridElectricPropulsionSystem(Group):
             ["ac|propulsion|generator|rating", "gen_rating", 250.0, "kW"],
             ["ac|weights|W_battery", "batt_weight", 2000, "kg"],
             ["ac|propulsion|battery|specific_energy", "specific_energy", 300, "W*h/kg"],
+            ["ac|propulsion|battery|n_strngs", "n_strngs", 4, None],
+            ["ac|propulsion|battery|n_motors", "n_motors", 4, None],
+            ["ac|propulsion|battery|rloop_motor_dc_in", "rloop_motor_dc_in", 0.001 * np.ones(nn), "ohm"],
+            ["ac|propulsion|battery|n_str", "n_str", 4, None],
+            ["ac|propulsion|battery|eta_converter", "eta_converter", 0.95 * np.ones(nn), None],
+            ["ac|propulsion|battery|cell_capacity", "cell_capacity", 29.97, "A*h"],
+            ["ac|propulsion|battery|t_cell_init", "t_cell_init", 30, "K"],
+            ["ac|propulsion|battery|m_cell", "m_cell", 0.346, "kg"],
+            ["ac|propulsion|battery|cp_cell", "cp_cell", 900, "J/kg/K"],
+            ["ac|propulsion|battery|q_cool_bat", "q_cool_bat", 25 * np.ones(nn), "kW"],
+            ["ac|propulsion|battery|soc_init", "soc_init", 1, None],
+            ["ac|propulsion|battery|i_cell_charge_lim", "i_cell_charge_lim", 100, "A"],
+            ["ac|propulsion|battery|v_cell_charge_lim", "v_cell_charge_lim", 4.2, "V"],
+            ["ac|propulsion|battery|n_series_per_str", "n_series_per_str", 1, None],
+            ["ac|propulsion|battery|n_parallel_per_str", "n_parallel_per_str", 1, None],
+            ["ac|propulsion|motor|gear_ratio", "motor_gear_ratio", 3, None],
+            ["ac|propulsion|turbine|gear_ratio", "turbine_gear_ratio", 20, None],
+            ["ac|propulsion|motor|torque_cmd", "torque_cmd", 5000 * np.ones(nn), "N*m"],
+            ["ac|propulsion|motor|rpm", "motor_rpm", 1000 * np.ones(nn), "rpm"],
         ]
         
         self.add_subsystem("dvs", DVLabel(dvlist), promotes_inputs=["*"], promotes_outputs=["*"])
@@ -133,7 +162,7 @@ class QuadParallelHybridElectricPropulsionSystem(Group):
 
 
         # Combine Electrical Loads for Motor
-        input_motor_names_str = [f"motor{i+1}_elec_load" for i in range(npp)]
+        input_motor_names_str = [f"motor{i+1}_{j+1}_elec_load" for i in range(npp) for j in range(nm)]
         addpower = AddSubtractComp(
             output_name="motors_elec_load",
             input_names=input_motor_names_str,
@@ -148,16 +177,25 @@ class QuadParallelHybridElectricPropulsionSystem(Group):
 
         self.add_subsystem("add_power", subsys=addpower, promotes_outputs=["*"])
 
+        self.add_subsystem(
+            "batt1", DischargeEmpiricalBattery(num_nodes=nn, v_cutoff=2.5), promotes_inputs=[]
+        )
         input_motor_weight_names_str = []
         input_prop_weight_names_str = []
         input_turbine_weight_names_str = []
         for i_p in range(npp):
             # Connect Electrical Loads for Motor
             for i_m in range(nm):
-                #self.connect(f"nacelle{i_p+1}.motor{i_m+1}_elec_load", f"add_power.motor{i_m+1}_elec_load")
+                self.connect(f"nacelle{i_p+1}.motor{i_m+1}.elec_power", f"add_power.motor{i_p+1}_{i_m+1}_elec_load")
                 input_motor_weight_names_str.append(f"nacelle{i_p+1}.motor{i_m+1}_weight")
+                self.connect("batt1.v_motor", f"nacelle{i_p+1}.motor{i_m+1}.voltage")
+                self.connect(f"nacelle{i_p+1}.motor{i_m+1}.torque", f"nacelle{i_p+1}.planetary_gearbox.motor{i_m+1}_torque")
+                #self.connect(f"nacelle1{i_p+1}.motor{i_m+1}.rpm", f"nacelle{i_p+1}.planetary_gearbox.motor{i_m+1}_rpm")
+
+                
+
             # end
-            self.connect(f"nacelle{i_p+1}.prop.thrust", f"add_power.prop{i_p+1}_thrust")
+            #self.connect(f"nacelle{i_p+1}.prop.thrust", f"add_power.prop{i_p+1}_thrust")
             input_prop_weight_names_str.append(f"nacelle{i_p+1}.prop{i_p+1}_weight")
             input_turbine_weight_names_str.append(f"nacelle{i_p+1}.turb.weight")
             self.connect("prop_diameter", f"nacelle{i_p+1}.prop.diameter")
@@ -169,10 +207,7 @@ class QuadParallelHybridElectricPropulsionSystem(Group):
         # end
 
 
-        self.add_subsystem(
-            "batt1", SOCBattery(num_nodes=nn, efficiency=0.97), promotes_inputs=["duration", "specific_energy"]
-        )
-        self.connect("motors_elec_load", "batt1.elec_load")
+
         self.add_subsystem(
             "eng_throttle_set",
             BalanceComp(
@@ -277,38 +312,47 @@ if __name__ == "__main__":
 
     # Propeller Inputs
     ivc.add_output('diameter', val=4.4, units='m', desc='Propeller diameter')
-    ivc.add_output('rpm', val=1000.0 * np.ones(num_nodes), units='rpm', desc='RPM')
+    ivc.add_output('prop_rpm', val=1000.0 * np.ones(num_nodes), units='rpm', desc='RPM')
 
     # Turbine Inputs
-    ivc.add_output('fltcond|h', 10000*0.3048 * np.ones(num_nodes), units='m', desc='Altitude in meters')
-    ivc.add_output('disa', 0 * np.ones(num_nodes), desc='DISA in degrees Celsius')
+    ivc.add_output('fltcond|disa', 0 * np.ones(num_nodes), desc='DISA in degrees Celsius')
     ivc.add_output('frac', 0.6 * np.ones(num_nodes), desc='Throttle fraction')
 
     # Motor Inputs
-    ivc.add_output('voltage', 700 * np.ones(num_nodes), units=None, desc='Motor voltage')
-    ivc.add_output('power_W', 125 * 1000 * np.ones(num_nodes), units='W', desc='Motor power')
+    ivc.add_output('ac|propulsion|motor|gear_ratio', 3.0, units=None, desc='Motor gear ratio')
+    ivc.add_output('ac|propulsion|turbine|gear_ratio', 20.0, units=None, desc='Turbine gear ratio')
+
+    ivc.add_output('ac|propulsion|motor|torque_cmd', 5000 * np.ones(num_nodes), units='N*m', desc='Commanded torque')
+    ivc.add_output('ac|propulsion|motor|rpm', 1000 * np.ones(num_nodes), units='rpm', desc='Motor RPM')
+    #ivc.add_output('voltage', 700 * np.ones(num_nodes), units='V', desc='Motor voltage')
+    
+    # Gearbox Inputs
+    ivc.add_output('ac|propulsion|motor|gear_ratio', 3.0, units=None, desc='Motor gear ratio')
+    ivc.add_output('ac|propulsion|turbine|gear_ratio', 20.0, units=None, desc='Turbine gear ratio')
+
+
 
     # Battery Inputs
-    bat_data = BatteryData.get_data()
-
-    ivc.add_output('n_strngs', 4, desc='number of battery strings')
-    ivc.add_output('p_ptrain_elec', 100 * np.ones(num_nodes), units='W', desc='Total propulsion electric power demand')
-    ivc.add_output('n_motors', 4, desc='Number of electric motors')
-    ivc.add_output('rloop_motor_dc_in', 0.001 * np.ones(num_nodes), units='ohm', desc='DC loop resistance to each motor')
-    ivc.add_output('n_str', bat_data.n_str, desc='number of battery strings')
+    bat_data = BatteryData.get_data(bat_filename='openconcept/propulsion/empirical_data/inHouse_battery_1motorConfig_208s27p_4grp_to_each_nacelle.xlsx', 
+                                    cell_sheetname='BOL_cell_fct_CRate', 
+                                    config_sheetname='battery_config')
+    ivc.add_output('ac|propulsion|battery|n_strngs', 4, desc='number of battery strings')
+    ivc.add_output('ac|propulsion|battery|n_motors', 4, desc='Number of electric motors')
+    ivc.add_output('ac|propulsion|battery|rloop_motor_dc_in', 0.001 * np.ones(num_nodes), units='ohm', desc='DC loop resistance to each motor')
+    ivc.add_output('ac|propulsion|battery|n_str', bat_data.n_str, desc='number of battery strings')
     ivc.add_output('dtime', 1 * np.ones(num_nodes), units='s', desc='time step')
-    ivc.add_output('eta_converter', 0.95 * np.ones(num_nodes), units=None, desc='efficiency of the converter')
+    ivc.add_output('ac|propulsion|battery|eta_converter', 0.95 * np.ones(num_nodes), units=None, desc='efficiency of the converter')
 
     ivc.add_output('p_aux_elec', 100 * np.ones(num_nodes), units='W', desc='Auxiliary electric load on LV side')
     ivc.add_output('rloop_aux_conv_hv_dc_in', 0.001 * np.ones(num_nodes), units='ohm', desc='DC loop resistance to LV converter')
 
     # Load up Battery Data
-    ivc.add_output('cell_capacity', bat_data.cell_Ah_capacity, units='A*h', desc='Cell capacity')
-    ivc.add_output('t_cell_init', 30, units='K', desc='Initial temperature of the cell')
-    ivc.add_output('m_cell', bat_data.m_cell, units='kg', desc='Mass of the cell')
-    ivc.add_output('cp_cell', bat_data.cp_cell, units='J/kg/K', desc='Specific heat capacity of the cell')
-    ivc.add_output('q_cool_bat', 25 * np.ones(num_nodes), units='kW', desc='Cooling power of the battery')
-    ivc.add_output('soc_init', bat_data.soc_init, units=None, desc='Initial state of charge of the battery')
+    ivc.add_output('ac|propulsion|battery|cell_capacity', bat_data.cell_Ah_capacity, units='A*h', desc='Cell capacity')
+    ivc.add_output('ac|propulsion|battery|t_cell_init', 30, units='K', desc='Initial temperature of the cell')
+    ivc.add_output('ac|propulsion|battery|m_cell', bat_data.m_cell, units='kg', desc='Mass of the cell')
+    ivc.add_output('ac|propulsion|battery|cp_cell', bat_data.cp_cell, units='J/kg/K', desc='Specific heat capacity of the cell')
+    ivc.add_output('ac|propulsion|battery|q_cool_bat', 25 * np.ones(num_nodes), units='kW', desc='Cooling power of the battery')
+    ivc.add_output('ac|propulsion|battery|soc_init', bat_data.soc_init, units=None, desc='Initial state of charge of the battery')
     
     # Power split fraction
     ivc.add_output('nacelle1|power_split_fraction', val=0.5 * np.ones(num_nodes), units=None)
@@ -318,8 +362,8 @@ if __name__ == "__main__":
 
     prob.model.add_subsystem('ivc', ivc, promotes_outputs=['*'])
 
-    npp = 4
-    nm = 2
+    npp = 4 # num nodes in analysis (time indexes)
+    nm = 2 # num motors per nacelle
     rule = "fraction"
     bias = "gt"
 
@@ -337,9 +381,13 @@ if __name__ == "__main__":
     # Set up the problem
     for i in range(npp):
         for j in range(nm):
-            pass
+            prob.model.connect("motor_rpm", [f"nacelle{i+1}.motor{j+1}.rpm", f"nacelle{i+1}.planetary_gearbox.motor{j+1}_rpm"])
+            prob.model.connect("torque_cmd", f"nacelle{i+1}.motor{j+1}.torque_cmd")
         # end
         prob.model.connect(f"nacelle{i+1}|power_split_fraction", f"nacelle{i+1}.power_split_fraction_gt")
+
+
+
     # end
 
     prob.setup()
