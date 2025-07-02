@@ -535,7 +535,8 @@ class EmpiricalMotor(om.Group):
     
     def initialize(self):
         self.options.declare('num_nodes', default=1, desc='number of nodes to evaluate')
-        self.options.declare('mode', default='power_in', desc='motor component solving mode. power_in or torque_speed_in')
+        self.options.declare('power_set', default=False, desc='True when power is set by the user and specific torque/rpm combo is not known')
+        self.options.declare('torque_rpm_set', default=False, desc='True when torque and RPM are set by the user and power is an output')
         
         # Load motor data
         MotorDataEffMap.load_data(motor_filename='openconcept/propulsion/empirical_data/H3X_HPDM_2300_eff.xlsx')
@@ -544,16 +545,18 @@ class EmpiricalMotor(om.Group):
     
     def setup(self):
         num_nodes = self.options['num_nodes']    
+        power_set = self.options['power_set']
+        torque_rpm_set = self.options['torque_rpm_set']
 
         # Add all subsystems
-        if self.options['mode'] == 'torque_speed_in':
+        if torque_rpm_set:
             self.add_subsystem('motor_voltage_interp', MotorVoltagePowerRBFInterpolator(num_nodes=num_nodes), promotes=['*'])
             self.add_subsystem('compute_power', ComputeMotorPower(num_nodes=num_nodes), promotes=['*'])
             self.add_subsystem('motor_eff_interp', MotorEfficiencyRBFInterpolator(num_nodes=num_nodes), promotes=['*'])
-        elif self.options['mode'] == 'power_in':
+        elif power_set:
             self.add_subsystem('motor_power_interp', MotorPowerEfficiencyRBFInterpolator(num_nodes=num_nodes), promotes=['*'])
         else:
-            raise ValueError(f"Invalid mode: {self.options['mode']}")
+            raise ValueError(f"Invalid mode. Choose one of: power_set={power_set}, torque_rpm_set={torque_rpm_set}")
         # end 
 
         # Add the electrical power computation
@@ -574,14 +577,16 @@ def test_motor_components():
     model = om.Group()
     ivc = om.IndepVarComp()
 
-    mode = 'power_in'
+    power_set = True
+    torque_rpm_set = False
+
     ivc.add_output('voltage', 700 * np.ones(num_nodes), units='V', desc='Motor voltage')
     
     # Add independent variables
-    if mode == 'torque_speed_in':
+    if torque_rpm_set:
         ivc.add_output('torque_cmd', 5000 * np.ones(num_nodes), units='N*m', desc='Commanded torque')
         ivc.add_output('rpm', 1500 * np.ones(num_nodes), units='rpm', desc='Motor speed')
-    elif mode == 'power_in':
+    elif power_set:
         ivc.add_output('mech_power', 1000 * np.ones(num_nodes), units='kW', desc='Commanded power')
 
     
@@ -601,11 +606,11 @@ def test_motor_components():
     eff = prob.get_val('eff')
     
     print(f"Results for {num_nodes} nodes:")
-    if mode == 'torque_speed_in':
+    if torque_rpm_set:
         print(f"Commanded torque: {prob.get_val('torque_cmd', units='N*m')}")
         print(f"RPM: {prob.get_val('rpm', units='rpm')}")
         print(f"Voltage: {prob.get_val('voltage', units='V')}")
-    elif mode == 'power_in':
+    elif power_set:
         print(f"Commanded power: {prob.get_val('mech_power', units='kW')}")
 
     print(f"Mechanical power: {mech_power} W")

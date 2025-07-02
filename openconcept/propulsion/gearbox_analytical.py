@@ -331,18 +331,18 @@ class CombinedGearboxGroup(Group):
     def initialize(self):
         self.options.declare('num_nodes', default=1, desc='Number of analysis points')
         self.options.declare('n_motors', default=2, desc='Number of motor input shafts for planetary gearbox')
-        self.options.declare('output_set', default=False, desc='True when output (carrier) RPM, output power, turbine RPM, and gear ratios are set')
+        self.options.declare('carrier_set', default=False, desc='True when output (carrier) RPM, output power, turbine RPM, and gear ratios are set')
 
     
     def setup(self):
         num_nodes = self.options['num_nodes']
         n_motors = self.options['n_motors']
-        output_set = self.options['output_set']
+        carrier_set = self.options['carrier_set']
         
         # Add the simple gearbox
         self.add_subsystem('simple_gearbox', SimpleGearbox(num_nodes=num_nodes), promotes=['*'])
         
-        if output_set:
+        if carrier_set:
             # Add the flipped planetary gearbox
             self.add_subsystem('planetary_gearbox', FlippedPlanetaryGearbox(num_nodes=num_nodes, n_motors=n_motors), promotes=['*'])
         else:

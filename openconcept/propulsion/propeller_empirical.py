@@ -72,35 +72,35 @@ class PropellerRBFInterpolator(om.ExplicitComponent):
         self.options.declare('num_nodes', default=1, desc='number of nodes to evaluate')
         self.options.declare('nd', default=10, desc='number of design points to evaluate')
         self.options.declare('use_dynamic_data', default=True, desc='use dynamic data if True, static if False')
-        self.options.declare('known_power', default=False, desc='power is known')
-        self.options.declare('known_rpm', default=False, desc='rpm is known')
-        self.options.declare('known_thrust', default=True, desc='thrust is known')
+        self.options.declare('power_set', default=False, desc='power is set (input)')
+        self.options.declare('rpm_set', default=False, desc='rpm is set (input)')
+        self.options.declare('thrust_set', default=True, desc='thrust is set (input)')
     
     def setup(self):
         num_nodes = self.options['num_nodes']
         nd = self.options['nd']
-        known_power = self.options['known_power']
-        known_rpm = self.options['known_rpm']
-        known_thrust = self.options['known_thrust']
+        power_set = self.options['power_set']
+        rpm_set = self.options['rpm_set']
+        thrust_set = self.options['thrust_set']
         
         # Inputs
         self.add_input('fltcond|Utrue', val=100.0, units='m/s', desc='Airspeed matrix', shape=(num_nodes))
         self.add_input('diameter', val=4.4, units='m', desc='Diameter matrix', shape=(1))
         self.add_input('fltcond|h', val=10000.0, units='m', desc='Altitude matrix', shape=(num_nodes))
         
-        if known_thrust:
+        if thrust_set:
             self.add_input('thrust', val=10000.0, units='N', desc='Required thrust', shape=(num_nodes))
         
             # Known variable (input)
-            if known_power:
+            if power_set:
                 self.add_input('power', val=1000000.0, units='W', desc='Power matrix', shape=(num_nodes))
-            if known_rpm:
+            if rpm_set:
                 self.add_input('rpm', val=1000.0, units='rpm', desc='RPM matrix', shape=(num_nodes))
             
             # Unknown variable (output - to be optimized)
-            if known_power:
+            if power_set:
                 self.add_output('rpm', val=1000.0, units='rpm', desc='Optimal RPM matrix', shape=(num_nodes))
-            if known_rpm:
+            if rpm_set:
                 self.add_output('power', val=1000000.0, units='W', desc='Optimal Power matrix', shape=(num_nodes))
 
         else:
@@ -125,9 +125,9 @@ class PropellerRBFInterpolator(om.ExplicitComponent):
         X_train = np.column_stack([rpm_data, velocity_data, alt_data, power_data])
         self.thrust_interpolator = RBFInterpolator(X_train, thrust_data, kernel='thin_plate_spline')
     
-    def _objective_function(self, x, thrust_required, velocity, altitude, power_known, power_value, rpm_value):
+    def _objective_function(self, x, thrust_required, velocity, altitude, power_set, power_value, rpm_value):
         """Objective function for optimization: minimize |thrust_required - thrust_calculated|"""
-        if power_known:
+        if power_set:
             rpm = x
             power = power_value
         else:
@@ -147,21 +147,20 @@ class PropellerRBFInterpolator(om.ExplicitComponent):
         velocity = inputs['fltcond|Utrue']  # This is in m/s
         diameter = inputs['diameter']
         altitude = inputs['fltcond|h']
-        known_thrust = self.options['known_thrust']
+        thrust_set = self.options['thrust_set']
 
-        if known_thrust:
+        if thrust_set:
             thrust_required = inputs['thrust']
 
-
-        known_power = self.options['known_power']
-        known_rpm = self.options['known_rpm']
+        power_set = self.options['power_set']
+        rpm_set = self.options['rpm_set']
         
         num_nodes = self.options['num_nodes']
 
-        if known_thrust:
+        if thrust_set:
             
             # Get known values
-            if known_power:
+            if power_set:
                 power_value = inputs['power']
                 rpm_value = 1000.0 * np.ones(num_nodes)  # Initial guess for all points
             else:
@@ -169,7 +168,7 @@ class PropellerRBFInterpolator(om.ExplicitComponent):
                 power_value = 1000000.0 * np.ones(num_nodes)  # Initial guess for all points
             
             # Set bounds for optimization
-            if known_power:
+            if power_set:
                 # Optimize rpm, bounds from 500 to 2000 rpm
                 x0 = rpm_value
                 bounds = [(900, 1200)] * num_nodes
@@ -182,14 +181,14 @@ class PropellerRBFInterpolator(om.ExplicitComponent):
             result = minimize(
                 self._objective_function,
                 x0,
-                args=(thrust_required, velocity, altitude, known_power, power_value, rpm_value),
+                args=(thrust_required, velocity, altitude, power_set, power_value, rpm_value),
                 bounds=bounds,
                 method='Powell',
                 options={'maxiter': 100, 'ftol': 1e-6}
             )
             
             # Store results
-            if known_power:
+            if power_set:
                 outputs['rpm'] = result.x
                 optimal_rpm = result.x
                 optimal_power = power_value
@@ -223,15 +222,15 @@ class PropellerRBFInterpolator(om.ExplicitComponent):
 class EmpiricalPropeller(om.Group):
     """
     Comprehensive group that solves the propeller map with all components.
-    Handles different combinations of known/unknown variables and includes all necessary components.
+    Handles different combinations of set/unknown variables and includes all necessary components.
     """
     
     def initialize(self):
         self.options.declare('num_nodes', default=1, desc='number of time nodes to evaluate')
         self.options.declare('nd', default=10, desc='number of design points to evaluate')
-        self.options.declare('known_thrust', default=True, desc='thrust is known')
-        self.options.declare('known_power', default=False, desc='power is known')
-        self.options.declare('known_rpm', default=False, desc='rpm is known')
+        self.options.declare('thrust_set', default=True, desc='thrust is set (input)')
+        self.options.declare('power_set', default=False, desc='power is set (input)')
+        self.options.declare('rpm_set', default=False, desc='rpm is set (input)')
         self.options.declare('use_dynamic_data', default=True, desc='use dynamic data if True, static if False')
     
         # Load data immediately when module is imported - this ensures it's available for all components
@@ -240,18 +239,18 @@ class EmpiricalPropeller(om.Group):
 
     def setup(self):
         num_nodes = self.options['num_nodes']
-        known_thrust = self.options['known_thrust']
-        known_power = self.options['known_power']
-        known_rpm = self.options['known_rpm']
+        thrust_set = self.options['thrust_set']
+        power_set = self.options['power_set']
+        rpm_set = self.options['rpm_set']
         use_dynamic_data = self.options['use_dynamic_data']
         
         
         # Add the RBF interpolator component (now implicit)
         self.add_subsystem('prop_interp', PropellerRBFInterpolator(num_nodes=num_nodes,  
                                                                    use_dynamic_data=use_dynamic_data,
-                                                                   known_power=known_power,
-                                                                   known_thrust=known_thrust,
-                                                                   known_rpm=known_rpm), promotes=['*'])
+                                                                   power_set=power_set,
+                                                                   thrust_set=thrust_set,
+                                                                   rpm_set=rpm_set), promotes=['*'])
         
         self.add_subsystem('efficiency_calc', EfficiencyCalc(num_nodes=num_nodes), promotes=['*'])
         
@@ -319,12 +318,12 @@ def test_propeller_interpolation_accuracy():
     model.add_subsystem('ivc', ivc, promotes=['*'])
 
     
-    # Add the actual propeller component (known power and RPM, calculate thrust)
+    # Add the actual propeller component (power_set and rpm_set, calculate thrust)
     model.add_subsystem('prop_calc', 
                        EmpiricalPropeller(num_nodes=n_test_points, 
-                                               known_thrust=False, 
-                                               known_power=True,
-                                               known_rpm=True,
+                                               thrust_set=False, 
+                                               power_set=True,
+                                               rpm_set=True,
                                                use_dynamic_data=True), 
                        promotes=['*'])
 
@@ -546,12 +545,12 @@ def test_propeller_openmdao_component():
     
     model.add_subsystem('ivc', ivc, promotes=['*'])
     
-    # Add propeller component (known power and RPM, calculate thrust)
+    # Add propeller component (power_set and rpm_set, calculate thrust)
     model.add_subsystem('propeller_map', 
                        EmpiricalPropeller(num_nodes=n_test_points, 
-                                        known_thrust=False, 
-                                        known_power=True,
-                                        known_rpm=True,
+                                        thrust_set=False, 
+                                        power_set=True,
+                                        rpm_set=True,
                                         use_dynamic_data=True), 
                        promotes=['*'])
     

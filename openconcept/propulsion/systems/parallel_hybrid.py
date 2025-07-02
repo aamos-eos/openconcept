@@ -43,17 +43,9 @@ class ParallelHybridNacelle(Group):
 
         # define design variables that are independent of flight condition or control states
         
-
-
         for i in range(nm):
-            if power_set:
-                # Torque and speed are inputs. Solve for efficiency
-                motor_mode = 'torque_speed_in'
-            else:
-                # Power is input. Solve for efficiency
-                motor_mode = 'power_in'
             # end
-            self.add_subsystem(f"motor{i+1}", EmpiricalMotor(num_nodes=nn, mode=motor_mode), promotes_inputs=[])
+            self.add_subsystem(f"motor{i+1}", EmpiricalMotor(num_nodes=nn, power_set=power_set, torque_rpm_set=rpm_set), promotes_inputs=[])
         # end
 
         # Gas Turbine Gearbox
@@ -72,9 +64,9 @@ class ParallelHybridNacelle(Group):
         self.add_subsystem("turb", EmpiricalDynamicTurbo(num_nodes=nn), promotes_outputs=[], promotes_inputs=["fltcond|*"])
 
         self.add_subsystem("prop", EmpiricalPropeller(num_nodes=nn,
-                                                      known_thrust = thrust_set,
-                                                      known_power = power_set,
-                                                      known_rpm = rpm_set, 
+                                                      thrust_set = thrust_set,
+                                                      power_set = power_set,
+                                                      rpm_set = rpm_set, 
                                                       use_dynamic_data = True), promotes_inputs=["fltcond|*"])
 
 
