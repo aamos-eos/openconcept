@@ -35,7 +35,7 @@ class MotorDataEffMap:
             #print(df[dupe_input_mask])
             #print(f"Number of singular (duplicate input) points: {dupe_input_mask.sum()}")
             
-            print("Motor data loaded successfully!")
+            print("Motor data Efficiency Map loaded successfully!")
     
     @classmethod
     def get_data(cls, motor_filename='openconcept/propulsion/empirical_data/H3X_HPDM_2300_eff.xlsx'):
@@ -78,7 +78,7 @@ class MotorDataPowerVoltCurve:
             #print(df[dupe_input_mask])
             #print(f"Number of singular (duplicate input) points: {dupe_input_mask.sum()}")
             
-            print("Motor data loaded successfully!")
+            print("Motor data Power Voltage Curve loaded successfully!")
     
     @classmethod
     def get_data(cls, motor_filename='openconcept/propulsion/empirical_data/H3X_HPDM_2300_volts.xlsx'):

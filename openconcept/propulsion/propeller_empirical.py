@@ -68,6 +68,10 @@ class PropellerRBFInterpolator(om.ExplicitComponent):
     Takes velocity, RPM, diameter, and power as inputs.
     """
     
+    # Class-level interpolator (shared across all instances)
+    _thrust_interpolator = None
+    _interpolator_built = False
+    
     def initialize(self):
         self.options.declare('num_nodes', default=1, desc='number of nodes to evaluate')
         self.options.declare('nd', default=10, desc='number of design points to evaluate')
@@ -75,6 +79,25 @@ class PropellerRBFInterpolator(om.ExplicitComponent):
         self.options.declare('power_set', default=False, desc='power is set (input)')
         self.options.declare('rpm_set', default=False, desc='rpm is set (input)')
         self.options.declare('thrust_set', default=True, desc='thrust is set (input)')
+    
+    @classmethod
+    def _build_shared_interpolator(cls):
+        """Build interpolator once for all instances"""
+        if cls._interpolator_built:
+            return
+            
+        print("Building shared propeller interpolator...")
+        
+        alt_data = PropellerData.dyn_dens_alt_data__m
+        velocity_data = PropellerData.dyn_ktas_data__kts
+        rpm_data = PropellerData.dyn_rpm_data__rpm
+        power_data = PropellerData.dyn_power_data__W
+        thrust_data = PropellerData.dyn_thrust_data__N
+        X_train = np.column_stack([rpm_data, velocity_data, alt_data, power_data])
+        cls._thrust_interpolator = RBFInterpolator(X_train, thrust_data, kernel='thin_plate_spline')
+        
+        cls._interpolator_built = True
+        print("Shared propeller interpolator built successfully!")
     
     def setup(self):
         num_nodes = self.options['num_nodes']
@@ -111,19 +134,11 @@ class PropellerRBFInterpolator(om.ExplicitComponent):
         self.add_output('J', val=0.5, desc='Advance ratio matrix', shape=(num_nodes))
         self.add_output('thrust_calc', val=10000.0, units='N', desc='Calculated thrust', shape=(num_nodes))
         
-        self._build_interpolators()
+        # Ensure shared interpolator is built (only happens once)
+        self._build_shared_interpolator()
         
         # Use finite difference for all partials since optimization is involved
         self.declare_partials('*', '*', method='fd')
-    
-    def _build_interpolators(self):
-        alt_data = PropellerData.dyn_dens_alt_data__m
-        velocity_data = PropellerData.dyn_ktas_data__kts
-        rpm_data = PropellerData.dyn_rpm_data__rpm
-        power_data = PropellerData.dyn_power_data__W
-        thrust_data = PropellerData.dyn_thrust_data__N
-        X_train = np.column_stack([rpm_data, velocity_data, alt_data, power_data])
-        self.thrust_interpolator = RBFInterpolator(X_train, thrust_data, kernel='thin_plate_spline')
     
     def _objective_function(self, x, thrust_required, velocity, altitude, power_set, power_value, rpm_value):
         """Objective function for optimization: minimize |thrust_required - thrust_calculated|"""
@@ -139,7 +154,7 @@ class PropellerRBFInterpolator(om.ExplicitComponent):
         
         # Interpolate thrust for all points at once
         X_query = np.column_stack([rpm, velocity_kts, altitude, power])
-        thrust_calc = self.thrust_interpolator(X_query)
+        thrust_calc = self._thrust_interpolator(X_query)
         
         return np.sum(np.abs(thrust_required - thrust_calc))
     
@@ -206,12 +221,12 @@ class PropellerRBFInterpolator(om.ExplicitComponent):
             X_query = np.column_stack([optimal_rpm, velocity_kts, altitude, optimal_power])
 
             # Calculate final thrust for verification
-            outputs['thrust_calc'] = self.thrust_interpolator(X_query)
+            outputs['thrust_calc'] = self._thrust_interpolator(X_query)
         else:
             # Convert velocity from m/s to knots for interpolator
             velocity_kts = velocity / 0.514444
             X_query = np.column_stack([inputs['rpm'], velocity_kts, altitude, inputs['power']])
-            outputs['thrust_calc'] = self.thrust_interpolator(X_query)
+            outputs['thrust_calc'] = self._thrust_interpolator(X_query)
             outputs['J'] = velocity / (inputs['rpm'] / 60.0 * diameter)
 
 

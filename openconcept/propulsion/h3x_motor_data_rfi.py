@@ -37,7 +37,7 @@ class MotorDataPowerEffCurve:
             #print(df[dupe_input_mask])
             #print(f"Number of singular (duplicate input) points: {dupe_input_mask.sum()}")
             
-            print("Motor data loaded successfully!")
+            print("Motor data Power Efficiency Curve loaded successfully!")
     
     @classmethod
     def get_data(cls, motor_filename):

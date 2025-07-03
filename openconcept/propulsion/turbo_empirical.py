@@ -55,7 +55,7 @@ def test_interpolation_accuracy():
 
     model.add_subsystem('ivc', ivc, promotes=['*'])
     #model.add_subsystem('power_solver', TurboFuelFlowFromPower(num_nodes=num_nodes), promotes=["*"])
-    model.add_subsystem('fuel_flow_group', TurboFuelFlowFromPowerMetaModel(num_nodes=num_nodes), promotes=["*"])
+    model.add_subsystem('fuel_flow_group', TurboFuelFlowRBF(num_nodes=num_nodes), promotes=["*"])
 
     prob = om.Problem(model, reports=False)
     prob.setup()
@@ -148,14 +148,65 @@ class TurboFuelFlowRBF(om.ExplicitComponent):
         Fuel flow rate [kg/h]
     """
     
+    # Class-level interpolators (shared across all instances)
+    _dyn_fuel_flow_interpolator = None
+    _dyn_power_interpolator = None
+    _idle_fuel_flow_interpolator = None
+    _idle_power_interpolator = None
+    _stat_fuel_flow_interpolator = None
+    _stat_power_interpolator = None
+    _interpolators_built = False
+    
     def initialize(self):
         self.options.declare('num_nodes', default=1, desc='Number of analysis points')
         self.options.declare('throttle_set', default=True, desc='Set throttle or power for gas turbine')
         # Load data immediately when component is initialized
         TurboData.load_data(turbo_filename='openconcept/propulsion/empirical_data/PT6E-67XP-4_EngData.xlsx', sheet_name='CRZ')
 
+    @classmethod
+    def _build_shared_interpolators(cls):
+        """Build interpolators once for all instances"""
+        if cls._interpolators_built:
+            return
+            
+        print("Building shared turbo interpolators...")
+        
+        # Build dynamic interpolator
+        alt_data = TurboData.dyn_alt_data__m
+        mach_data = TurboData.dyn_mach_data
+        disa_data = TurboData.dyn_disa_data__degC
+        fuel_flow_data = TurboData.dyn_fuel_flow_data__kgph
+        power_data_kW = TurboData.dyn_power_data__kW
+        throttle_data = TurboData.dyn_frac_data
+        
+        X_train = np.column_stack([alt_data, mach_data, disa_data, throttle_data])
+        cls._dyn_fuel_flow_interpolator = RBFInterpolator(X_train, fuel_flow_data, kernel='thin_plate_spline')
+        cls._dyn_power_interpolator = RBFInterpolator(X_train, power_data_kW, kernel='thin_plate_spline')
+        
+        # Build idle interpolators
+        idle_alt_data = TurboData.idle_alt_data__m
+        idle_fuel_flow_data = TurboData.idle_fuel_flow_data__kgph
+        idle_power_data = TurboData.idle_power_data__kW
+        
+        cls._idle_fuel_flow_interpolator = UnivariateSpline(idle_alt_data, idle_fuel_flow_data, s=0)
+        cls._idle_power_interpolator = UnivariateSpline(idle_alt_data, idle_power_data, s=0)
+        
+        # Build static interpolators
+        stat_alt_data = TurboData.stat_alt_data__m
+        stat_disa_data = TurboData.stat_disa_data__degC
+        stat_power_data_kW = TurboData.stat_power_data__kW
+        stat_frac_data = TurboData.stat_frac_data
+        stat_fuel_flow_data = TurboData.stat_fuel_flow_data__kgph
+        
+        X_train_static = np.column_stack([stat_alt_data, stat_disa_data, stat_frac_data])
+        cls._stat_fuel_flow_interpolator = RBFInterpolator(X_train_static, stat_fuel_flow_data, kernel='thin_plate_spline')
+        cls._stat_power_interpolator = RBFInterpolator(X_train_static, stat_power_data_kW, kernel='thin_plate_spline')
+        
+        cls._interpolators_built = True
+        print("Shared turbo interpolators built successfully!")
     
     def setup(self):
+        print("Setting up TurboFuelFlowRBF...")
         nn = self.options['num_nodes']
         
         # Inputs
@@ -165,6 +216,7 @@ class TurboFuelFlowRBF(om.ExplicitComponent):
 
         if self.options['throttle_set']:
             self.add_input('throttle', val=0.6, units=None, desc='Throttle fraction', shape=(nn,))
+            self.add_output('power', val=1000.0, units='kW', desc='Power output', shape=(nn,))
         else:
             self.add_input('power', val=1000.0, units='kW', desc='Power output', shape=(nn,))
         # end
@@ -174,70 +226,11 @@ class TurboFuelFlowRBF(om.ExplicitComponent):
         # Declare partials
         self.declare_partials('*', '*', method='fd')
         
-        # Build interpolator in setup
-        self._build_dyn_interpolator()
-        self._build_idle_interpolator_fuel_flow()
-        self._build_idle_interpolator_power()
-        self._build_stat_interpolator()
+        # Ensure shared interpolators are built (only happens once)
+        self._build_shared_interpolators()
 
-    def _build_stat_interpolator(self):
-        """Build RBF interpolator for fuel flow based on static (Mach = 0, throttle > 0) data"""
-        # Get training data
-        alt_data = TurboData.stat_alt_data__m
-        disa_data = TurboData.stat_disa_data__degC
-
-        if self.options['throttle_set']:
-            frac_data = TurboData.stat_frac_data
-            X_train = np.column_stack([alt_data, disa_data, frac_data])
-        else:
-            power_data_kW = TurboData.stat_power_data__kW
-            X_train = np.column_stack([alt_data, disa_data, power_data_kW])
-        # end
-
-        fuel_flow_data = TurboData.stat_fuel_flow_data__kgph
-        
-        # Create RBF interpolator
-        self.stat_fuel_flow_interpolator = RBFInterpolator(X_train, fuel_flow_data, kernel='thin_plate_spline')
-
-    def _build_idle_interpolator_fuel_flow(self):
-        """Build interpolator for fuel flow based on idle (throttle = 0) data"""
-        # Get training data
-        alt_data = TurboData.idle_alt_data__m
-        fuel_flow_data = TurboData.idle_fuel_flow_data__kgph
-
-        # Data is already cleaned in TurboData.load_data()
-        self.idle_fuel_flow_interpolator = UnivariateSpline(alt_data, fuel_flow_data, s=0)
-
-    def _build_idle_interpolator_power(self):
-        """Build interpolator for power based on idle (throttle = 0) data"""
-        # Get training data
-        alt_data = TurboData.idle_alt_data__m
-        power_data_kW = TurboData.idle_power_data__kW
-
-        # Data is already cleaned in TurboData.load_data()
-        self.idle_power_interpolator = UnivariateSpline(alt_data, power_data_kW, s=0)
-
-    def _build_dyn_interpolator(self):
-        """Build RBF interpolator for fuel flow based on dynamic (Mach > 0, throttle > 0) data"""
-        # Get training data
-        alt_data = TurboData.dyn_alt_data__m
-        mach_data = TurboData.dyn_mach_data
-        disa_data = TurboData.dyn_disa_data__degC
-        fuel_flow_data = TurboData.dyn_fuel_flow_data__kgph
-
-        if self.options['throttle_set']:
-            throttle_data = TurboData.dyn_frac_data
-            X_train = np.column_stack([alt_data, mach_data, disa_data, throttle_data])
-
-        else:
-            power_data_kW = TurboData.dyn_power_data__kW
-            X_train = np.column_stack([alt_data, mach_data, disa_data, power_data_kW])
-        # end
-
-        # Create RBF interpolator
-        self.dyn_fuel_flow_interpolator = RBFInterpolator(X_train, fuel_flow_data, kernel='thin_plate_spline')
-    
     def compute(self, inputs, outputs):
+        print("Computing Fuel Flow...")
         throttle_set = self.options['throttle_set']
         
         altitude = inputs['fltcond|h']
@@ -257,11 +250,13 @@ class TurboFuelFlowRBF(om.ExplicitComponent):
             
             # Initialize output array
             fuel_flow = np.zeros_like(altitude)
+            power = np.zeros_like(altitude)
             
             # Handle idle points
             if len(idle_indices) > 0:
-                fuel_flow_idle = self.idle_fuel_flow_interpolator(altitude[idle_indices])
+                fuel_flow_idle = self._idle_fuel_flow_interpolator(altitude[idle_indices])
                 fuel_flow[idle_indices] = fuel_flow_idle
+                power[idle_indices] = self._idle_power_interpolator(altitude[idle_indices])
 
             # Handle static points
             if len(static_indices) > 0:
@@ -270,8 +265,9 @@ class TurboFuelFlowRBF(om.ExplicitComponent):
                     disa[static_indices], 
                     throttle[static_indices]
                 ])
-                fuel_flow_static = self.stat_fuel_flow_interpolator(X_query_static)
+                fuel_flow_static = self._stat_fuel_flow_interpolator(X_query_static)
                 fuel_flow[static_indices] = fuel_flow_static
+                power[static_indices] = self._stat_power_interpolator(X_query_static)
             
             # Handle dynamic points
             if len(dynamic_indices) > 0:
@@ -281,8 +277,11 @@ class TurboFuelFlowRBF(om.ExplicitComponent):
                     disa[dynamic_indices], 
                     throttle[dynamic_indices]
                 ])
-                fuel_flow_dynamic = self.dyn_fuel_flow_interpolator(X_query_dynamic)
+                fuel_flow_dynamic = self._dyn_fuel_flow_interpolator(X_query_dynamic)
                 fuel_flow[dynamic_indices] = fuel_flow_dynamic
+                power[dynamic_indices] = self._dyn_power_interpolator(X_query_dynamic)
+
+            outputs['power'] = power
         
         else:
             power = inputs['power']
@@ -303,7 +302,7 @@ class TurboFuelFlowRBF(om.ExplicitComponent):
                     disa[static_indices], 
                     power[static_indices]
                 ])
-                fuel_flow_static = self.stat_fuel_flow_interpolator(X_query_static)
+                fuel_flow_static = self._stat_fuel_flow_interpolator(X_query_static)
                 fuel_flow[static_indices] = fuel_flow_static
             
             # Handle dynamic points
@@ -314,7 +313,7 @@ class TurboFuelFlowRBF(om.ExplicitComponent):
                     disa[dynamic_indices], 
                     power[dynamic_indices]
                 ])
-                fuel_flow_dynamic = self.dyn_fuel_flow_interpolator(X_query_dynamic)
+                fuel_flow_dynamic = self._dyn_fuel_flow_interpolator(X_query_dynamic)
                 fuel_flow[dynamic_indices] = fuel_flow_dynamic
         
         outputs['fuel_flow_kgph'] = fuel_flow
@@ -360,11 +359,59 @@ class TurboFuelFlowFromPowerMetaModel(om.Group):
         self.add_subsystem('fuel_flow_metamodel', fuel_flow_metamodel, promotes=["*"])
 
 
+class ThrottleToPower(om.ExplicitComponent):
+    """
+    Simple component that converts throttle to mechanical power.
+    
+    Inputs
+    ------
+    throttle : array_like
+        Throttle fraction [0-1]
+    max_nac_power : array_like
+        Maximum nacelle power [kW]
+    
+    Outputs
+    -------
+    nac_mech_power : array_like
+        Mechanical power output [kW]
+    """
+    
+    def initialize(self):
+        self.options.declare('num_nodes', default=1, desc='Number of analysis points')
+    
+    def setup(self):
+        nn = self.options['num_nodes']
+        
+        # Inputs
+        self.add_input('throttle', val=0.6, units=None, desc='Throttle fraction', shape=(nn,))
+        self.add_input('max_nac_power', val=1000.0, units='kW', desc='Maximum nacelle power', shape=(nn,))
+        
+        # Outputs
+        self.add_output('nac_mech_power', val=600.0, units='kW', desc='Mechanical power output', shape=(nn,))
+        
+        # Declare partials
+        self.declare_partials('*', '*', method='exact')
+    
+    def compute(self, inputs, outputs):
+        throttle = inputs['throttle']
+        max_nac_power = inputs['max_nac_power']
+        
+        outputs['nac_mech_power'] = throttle * max_nac_power
+    
+    def compute_partials(self, inputs, partials):
+        throttle = inputs['throttle']
+        max_nac_power = inputs['max_nac_power']
+        
+        # Partial derivatives
+        partials['nac_mech_power', 'throttle'] = max_nac_power
+        partials['nac_mech_power', 'max_nac_power'] = throttle
+
+
 if __name__ == "__main__":
     
 
 
-    num_nodes = 10
+    num_nodes = 30
     
     # Set up the OpenMDAO model
     model = om.Group()
@@ -372,9 +419,9 @@ if __name__ == "__main__":
     
     # Add independent variables with vectorization
     ivc.add_output('fltcond|h', 10000*0.3048 * np.ones(num_nodes), units='m', desc='Altitude in meters')
-    ivc.add_output('fltcond|M', 0.01 * np.ones(num_nodes), desc='Mach number')
+    ivc.add_output('fltcond|M', np.linspace(0, 0.4, num_nodes), desc='Mach number')
     ivc.add_output('fltcond|disa', 20 * np.ones(num_nodes), desc='DISA in degrees Celsius')
-    ivc.add_output('throttle', 0.6 * np.ones(num_nodes), desc='Throttle fraction')
+    ivc.add_output('throttle', np.linspace(0, 1, num_nodes), desc='Throttle fraction')
     
     model.add_subsystem('ivc', ivc, promotes=['*'])
     model.add_subsystem('dyn_turbo_group', TurboFuelFlowRBF(num_nodes=num_nodes), promotes=["*"])
@@ -387,15 +434,10 @@ if __name__ == "__main__":
 
     
     prob.run_model()
-    
+    print("Fuel Flow [kg/h]:")
     print(prob.get_val('fuel_flow_kgph'))
-    
-    # we can verify all gradients by checking against finite-difference
-    #prob.check_partials(compact_print=True)
-    
-    # Grid interpolation
-    f_prop_thrust_interp = NearestNDInterpolator((TurboData.dyn_alt_data__m, TurboData.dyn_mach_data, TurboData.dyn_disa_data__degC, TurboData.dyn_frac_data), TurboData.dyn_fuel_flow_data__kgph)
-    print(f"Fuel Flow grid interpolation  = {f_prop_thrust_interp((10000*0.3048, 0.01, 20, 0.6))}")
+    print("Power [kW]:")
+    print(prob.get_val('power'))
     
     # Test interpolation accuracy
     test_interpolation_accuracy()
