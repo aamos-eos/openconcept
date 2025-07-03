@@ -9,7 +9,7 @@ from .splitter import PowerSplit, PowerSplitNacelle
 from .turboshaft import SimpleTurboshaft
 from .motor_empirical_rbf import EmpiricalMotor
 from .propeller_empirical import EmpiricalPropeller
-from .turbo_empirical import EmpiricalDynamicTurbo, EmpiricalStaticTurbo
+from .turbo_empirical import TurboFuelFlowRBF
 from .battery_empirical import ChargeEmpiricalBattery, DischargeEmpiricalBattery
 
 # Pre-made propulsion systems

@@ -101,14 +101,22 @@ class MotorPowerEfficiencyRBFInterpolator(om.ExplicitComponent):
     """
     def initialize(self):
         self.options.declare('num_nodes', default=1, desc='number of nodes to evaluate')
+        self.options.declare('throttle_set', default=False, desc='Specify absolute power or motor throttle')
+        self.options.declare('max_power', default=MotorDataPowerEffCurve.power_data__W.max(), desc='Absolute mechanical power of motor')
 
     def setup(self):
         num_nodes = self.options['num_nodes']
+        throttle_set = self.options['throttle_set']
         
         self.add_input('voltage', units='V', shape=(num_nodes,), desc='Motor voltage')
-        self.add_input('mech_power', units='W', shape=(num_nodes,), desc='Motor power')
+
+        if throttle_set:
+            self.add_input('throttle', units=None, shape=(num_nodes,), desc='Motor throttle')
+        else:
+            self.add_input('mech_power', units='W', shape=(num_nodes,), desc='Motor power')
+
         self.add_output('eff', units=None, shape=(num_nodes,), desc='Motor efficiency')
-        
+        # end 
         # Create the RBF interpolator using the global data
         # Note: This assumes you have voltage, power, and efficiency data available
         # You may need to adjust the data source based on your available datasets
@@ -123,11 +131,18 @@ class MotorPowerEfficiencyRBFInterpolator(om.ExplicitComponent):
         self.declare_partials('*', '*', method='cs')
 
     def compute(self, inputs, outputs):
+
+        throttle_set = self.options['throttle_set']
+        max_power = self.options['max_power']
+
         voltage = inputs['voltage']
-        power = inputs['mech_power']
+        if throttle_set:
+            mech_power = inputs['throttle'] * max_power
+        else:
+            mech_power = inputs['mech_power']
         
         # Create test points for interpolation
-        test_points = np.column_stack([voltage, power])
+        test_points = np.column_stack([voltage, mech_power])
         
         # Interpolate efficiency
         eff = self.rbf_interpolator(test_points)
@@ -535,7 +550,6 @@ class EmpiricalMotor(om.Group):
     
     def initialize(self):
         self.options.declare('num_nodes', default=1, desc='number of nodes to evaluate')
-        self.options.declare('power_set', default=False, desc='True when power is set by the user and specific torque/rpm combo is not known')
         self.options.declare('torque_rpm_set', default=False, desc='True when torque and RPM are set by the user and power is an output')
         
         # Load motor data
@@ -545,7 +559,6 @@ class EmpiricalMotor(om.Group):
     
     def setup(self):
         num_nodes = self.options['num_nodes']    
-        power_set = self.options['power_set']
         torque_rpm_set = self.options['torque_rpm_set']
 
         # Add all subsystems
@@ -553,10 +566,8 @@ class EmpiricalMotor(om.Group):
             self.add_subsystem('motor_voltage_interp', MotorVoltagePowerRBFInterpolator(num_nodes=num_nodes), promotes=['*'])
             self.add_subsystem('compute_power', ComputeMotorPower(num_nodes=num_nodes), promotes=['*'])
             self.add_subsystem('motor_eff_interp', MotorEfficiencyRBFInterpolator(num_nodes=num_nodes), promotes=['*'])
-        elif power_set:
-            self.add_subsystem('motor_power_interp', MotorPowerEfficiencyRBFInterpolator(num_nodes=num_nodes), promotes=['*'])
         else:
-            raise ValueError(f"Invalid mode. Choose one of: power_set={power_set}, torque_rpm_set={torque_rpm_set}")
+            self.add_subsystem('motor_power_interp', MotorPowerEfficiencyRBFInterpolator(num_nodes=num_nodes), promotes=['*'])
         # end 
 
         # Add the electrical power computation
@@ -577,8 +588,7 @@ def test_motor_components():
     model = om.Group()
     ivc = om.IndepVarComp()
 
-    power_set = True
-    torque_rpm_set = False
+    torque_rpm_set = True
 
     ivc.add_output('voltage', 700 * np.ones(num_nodes), units='V', desc='Motor voltage')
     
@@ -586,7 +596,7 @@ def test_motor_components():
     if torque_rpm_set:
         ivc.add_output('torque_cmd', 5000 * np.ones(num_nodes), units='N*m', desc='Commanded torque')
         ivc.add_output('rpm', 1500 * np.ones(num_nodes), units='rpm', desc='Motor speed')
-    elif power_set:
+    else:
         ivc.add_output('mech_power', 1000 * np.ones(num_nodes), units='kW', desc='Commanded power')
 
     
@@ -610,7 +620,7 @@ def test_motor_components():
         print(f"Commanded torque: {prob.get_val('torque_cmd', units='N*m')}")
         print(f"RPM: {prob.get_val('rpm', units='rpm')}")
         print(f"Voltage: {prob.get_val('voltage', units='V')}")
-    elif power_set:
+    else:
         print(f"Commanded power: {prob.get_val('mech_power', units='kW')}")
 
     print(f"Mechanical power: {mech_power} W")

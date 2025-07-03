@@ -45,7 +45,7 @@ class ParallelHybridNacelle(Group):
         
         for i in range(nm):
             # end
-            self.add_subsystem(f"motor{i+1}", EmpiricalMotor(num_nodes=nn, power_set=power_set, torque_rpm_set=rpm_set), promotes_inputs=[])
+            self.add_subsystem(f"motor{i+1}", EmpiricalMotor(num_nodes=nn, torque_rpm_set=rpm_set), promotes_inputs=[])
         # end
 
         # Gas Turbine Gearbox
