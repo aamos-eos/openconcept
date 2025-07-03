@@ -23,15 +23,24 @@ class MotorEfficiencyRBFInterpolator(om.ExplicitComponent):
     """
     Explicit component for 2D interpolation of RPM + Torque to Efficiency using RBF
     """
+    
+    # Class-level interpolator (shared across all instances)
+    _rbf_interpolator = None
+    _interpolator_built = False
+    
     def initialize(self):
         self.options.declare('num_nodes', default=1, desc='number of nodes to evaluate')
-
-    def setup(self):
-        num_nodes = self.options['num_nodes']
         
-        self.add_input('rpm', units='rpm', shape=(num_nodes,), desc='Motor speed')
-        self.add_input('torque', units='N*m', shape=(num_nodes,), desc='Motor torque')
-        self.add_output('eff', units=None, shape=(num_nodes,), desc='Motor efficiency')
+        # Build shared interpolator once when class is first initialized
+        self._build_shared_interpolator()
+
+    @classmethod
+    def _build_shared_interpolator(cls):
+        """Build interpolator once for all instances"""
+        if cls._interpolator_built:
+            return
+            
+        print("Building shared motor efficiency interpolator...")
         
         # Create the RBF interpolator using the global data
         rpm_data = MotorDataEffMap.rpm_data
@@ -40,7 +49,17 @@ class MotorEfficiencyRBFInterpolator(om.ExplicitComponent):
         
         # Create training points for RBF
         training_points = np.column_stack([rpm_data, torque_data])
-        self.rbf_interpolator = RBFInterpolator(training_points, eff_data, kernel='thin_plate_spline')
+        cls._rbf_interpolator = RBFInterpolator(training_points, eff_data, kernel='thin_plate_spline')
+        
+        cls._interpolator_built = True
+        print("Shared motor efficiency interpolator built successfully!")
+
+    def setup(self):
+        num_nodes = self.options['num_nodes']
+        
+        self.add_input('rpm', units='rpm', shape=(num_nodes,), desc='Motor speed')
+        self.add_input('torque', units='N*m', shape=(num_nodes,), desc='Motor torque')
+        self.add_output('eff', units=None, shape=(num_nodes,), desc='Motor efficiency')
         
         self.declare_partials('*', '*', method='cs')
 
@@ -52,7 +71,7 @@ class MotorEfficiencyRBFInterpolator(om.ExplicitComponent):
         test_points = np.column_stack([rpm, torque])
         
         # Interpolate efficiency
-        eff = self.rbf_interpolator(test_points)
+        eff = self._rbf_interpolator(test_points)
         
         outputs['eff'] = eff
 
@@ -61,15 +80,24 @@ class MotorVoltagePowerRBFInterpolator(om.ExplicitComponent):
     """
     Explicit component for 2D interpolation of RPM + Voltage to Power Limit using RBF
     """
+    
+    # Class-level interpolator (shared across all instances)
+    _rbf_interpolator = None
+    _interpolator_built = False
+    
     def initialize(self):
         self.options.declare('num_nodes', default=1, desc='number of nodes to evaluate')
-
-    def setup(self):
-        num_nodes = self.options['num_nodes']
         
-        self.add_input('rpm', units='rpm', shape=(num_nodes,), desc='Motor speed')
-        self.add_input('voltage', units='V', shape=(num_nodes,), desc='Motor voltage')
-        self.add_output('mech_power_lim', units='kW', shape=(num_nodes,), desc='Mechanical power limit')
+        # Build shared interpolator once when class is first initialized
+        self._build_shared_interpolator()
+
+    @classmethod
+    def _build_shared_interpolator(cls):
+        """Build interpolator once for all instances"""
+        if cls._interpolator_built:
+            return
+            
+        print("Building shared motor voltage/power interpolator...")
         
         # Create the RBF interpolator using the global data
         rpm_data = MotorDataPowerVoltCurve.rpm_data
@@ -78,7 +106,17 @@ class MotorVoltagePowerRBFInterpolator(om.ExplicitComponent):
         
         # Create training points for RBF
         training_points = np.column_stack([rpm_data, voltage_data])
-        self.rbf_interpolator = RBFInterpolator(training_points, power_data, kernel='thin_plate_spline')
+        cls._rbf_interpolator = RBFInterpolator(training_points, power_data, kernel='thin_plate_spline')
+        
+        cls._interpolator_built = True
+        print("Shared motor voltage/power interpolator built successfully!")
+
+    def setup(self):
+        num_nodes = self.options['num_nodes']
+        
+        self.add_input('rpm', units='rpm', shape=(num_nodes,), desc='Motor speed')
+        self.add_input('voltage', units='V', shape=(num_nodes,), desc='Motor voltage')
+        self.add_output('mech_power_lim', units='kW', shape=(num_nodes,), desc='Mechanical power limit')
         
         self.declare_partials('*', '*', method='cs')
 
@@ -90,7 +128,7 @@ class MotorVoltagePowerRBFInterpolator(om.ExplicitComponent):
         test_points = np.column_stack([rpm, voltage])
         
         # Interpolate power limit
-        mech_power_lim = self.rbf_interpolator(test_points)
+        mech_power_lim = self._rbf_interpolator(test_points)
         
         outputs['mech_power_lim'] = mech_power_lim
 
@@ -99,10 +137,38 @@ class MotorPowerEfficiencyRBFInterpolator(om.ExplicitComponent):
     """
     Explicit component for 2D interpolation of Voltage + Power to Efficiency using RBF
     """
+    
+    # Class-level interpolator (shared across all instances)
+    _rbf_interpolator = None
+    _interpolator_built = False
+    
     def initialize(self):
         self.options.declare('num_nodes', default=1, desc='number of nodes to evaluate')
         self.options.declare('throttle_set', default=False, desc='Specify absolute power or motor throttle')
         self.options.declare('max_power', default=MotorDataPowerEffCurve.power_data__W.max(), desc='Absolute mechanical power of motor')
+        
+        # Build shared interpolator once when class is first initialized
+        self._build_shared_interpolator()
+
+    @classmethod
+    def _build_shared_interpolator(cls):
+        """Build interpolator once for all instances"""
+        if cls._interpolator_built:
+            return
+            
+        print("Building shared motor power/efficiency interpolator...")
+        
+        # Create the RBF interpolator using the global data
+        voltage_data = MotorDataPowerEffCurve.voltage_data
+        power_data = MotorDataPowerEffCurve.power_data__W
+        eff_data = MotorDataPowerEffCurve.eff_data
+        
+        # Create training points for RBF
+        training_points = np.column_stack([voltage_data, power_data])
+        cls._rbf_interpolator = RBFInterpolator(training_points, eff_data, kernel='thin_plate_spline')
+        
+        cls._interpolator_built = True
+        print("Shared motor power/efficiency interpolator built successfully!")
 
     def setup(self):
         num_nodes = self.options['num_nodes']
@@ -116,22 +182,10 @@ class MotorPowerEfficiencyRBFInterpolator(om.ExplicitComponent):
             self.add_input('mech_power', units='W', shape=(num_nodes,), desc='Motor power')
 
         self.add_output('eff', units=None, shape=(num_nodes,), desc='Motor efficiency')
-        # end 
-        # Create the RBF interpolator using the global data
-        # Note: This assumes you have voltage, power, and efficiency data available
-        # You may need to adjust the data source based on your available datasets
-        voltage_data = MotorDataPowerEffCurve.voltage_data
-        power_data = MotorDataPowerEffCurve.power_data__W
-        eff_data = MotorDataPowerEffCurve.eff_data
-        
-        # Create training points for RBF
-        training_points = np.column_stack([voltage_data, power_data])
-        self.rbf_interpolator = RBFInterpolator(training_points, eff_data, kernel='thin_plate_spline')
         
         self.declare_partials('*', '*', method='cs')
 
     def compute(self, inputs, outputs):
-
         throttle_set = self.options['throttle_set']
         max_power = self.options['max_power']
 
@@ -145,7 +199,7 @@ class MotorPowerEfficiencyRBFInterpolator(om.ExplicitComponent):
         test_points = np.column_stack([voltage, mech_power])
         
         # Interpolate efficiency
-        eff = self.rbf_interpolator(test_points)
+        eff = self._rbf_interpolator(test_points)
         
         outputs['eff'] = eff
 

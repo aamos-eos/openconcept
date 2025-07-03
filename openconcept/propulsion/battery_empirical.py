@@ -154,16 +154,25 @@ class LineVoltageInterp2D(om.ExplicitComponent):
     """
     Explicit component for 2D interpolation of SOC + C-rate to line voltage using RBF
     """
+    
+    # Class-level interpolator (shared across all instances)
+    _rbf_interpolator = None
+    _interpolator_built = False
+    
     def initialize(self):
         self.options.declare('num_nodes', default=1, desc='number of nodes to evaluate')
         self.options.declare('v_cutoff', default=2.5, desc='Voltage cutoff for cell')
-
-    def setup(self):
-        num_nodes = self.options['num_nodes']
         
-        self.add_input('soc', units=None, shape=(num_nodes,), desc='State of charge')
-        self.add_input('c_rate', units='1/h', shape=(num_nodes,), desc='C-rate of the cell')
-        self.add_output('vline_cell', units='V', shape=(num_nodes,), desc='Voltage of the battery cell')
+        # Build shared interpolator once when class is first initialized
+        self._build_shared_interpolator()
+
+    @classmethod
+    def _build_shared_interpolator(cls):
+        """Build interpolator once for all instances"""
+        if cls._interpolator_built:
+            return
+            
+        print("Building shared battery line voltage interpolator...")
         
         # Create the RBF interpolator using the global data
         soc_mesh_flat = BatteryData.soc_mesh_flat
@@ -172,7 +181,17 @@ class LineVoltageInterp2D(om.ExplicitComponent):
         
         # Create training points for RBF
         training_points = np.column_stack([soc_mesh_flat, c_rate_mesh_flat])
-        self.rbf_interpolator = RBFInterpolator(training_points, line_voltage_flat, kernel='thin_plate_spline')
+        cls._rbf_interpolator = RBFInterpolator(training_points, line_voltage_flat, kernel='thin_plate_spline')
+        
+        cls._interpolator_built = True
+        print("Shared battery line voltage interpolator built successfully!")
+
+    def setup(self):
+        num_nodes = self.options['num_nodes']
+        
+        self.add_input('soc', units=None, shape=(num_nodes,), desc='State of charge')
+        self.add_input('c_rate', units='1/h', shape=(num_nodes,), desc='C-rate of the cell')
+        self.add_output('vline_cell', units='V', shape=(num_nodes,), desc='Voltage of the battery cell')
         
         self.declare_partials('*', '*', method='cs')
 
@@ -184,7 +203,7 @@ class LineVoltageInterp2D(om.ExplicitComponent):
         test_points = np.column_stack([soc, c_rate])
         
         # Interpolate line voltage
-        vline_cell = np.maximum(self.rbf_interpolator(test_points), self.options['v_cutoff'])
+        vline_cell = np.maximum(self._rbf_interpolator(test_points), self.options['v_cutoff'])
         
         outputs['vline_cell'] = vline_cell
 
@@ -193,15 +212,24 @@ class IR0Interp2D(om.ExplicitComponent):
     """
     Explicit component for 2D interpolation of SOC + C-rate to IR0 using RBF
     """
+    
+    # Class-level interpolator (shared across all instances)
+    _rbf_interpolator = None
+    _interpolator_built = False
+    
     def initialize(self):
         self.options.declare('num_nodes', default=1, desc='number of nodes to evaluate')
-
-    def setup(self):
-        num_nodes = self.options['num_nodes']
         
-        self.add_input('soc', units=None, shape=(num_nodes,), desc='State of charge')
-        self.add_input('c_rate', units='1/h', shape=(num_nodes,), desc='C-rate of the cell')
-        self.add_output('ir0_cell', units='ohm', shape=(num_nodes,), desc='Internal resistance of the battery cell')
+        # Build shared interpolator once when class is first initialized
+        self._build_shared_interpolator()
+
+    @classmethod
+    def _build_shared_interpolator(cls):
+        """Build interpolator once for all instances"""
+        if cls._interpolator_built:
+            return
+            
+        print("Building shared battery IR0 interpolator...")
         
         # Create the RBF interpolator using the global data
         soc_mesh_flat = BatteryData.soc_mesh_flat
@@ -210,7 +238,17 @@ class IR0Interp2D(om.ExplicitComponent):
         
         # Create training points for RBF
         training_points = np.column_stack([soc_mesh_flat, c_rate_mesh_flat])
-        self.rbf_interpolator = RBFInterpolator(training_points, ir0_flat, kernel='thin_plate_spline')
+        cls._rbf_interpolator = RBFInterpolator(training_points, ir0_flat, kernel='thin_plate_spline')
+        
+        cls._interpolator_built = True
+        print("Shared battery IR0 interpolator built successfully!")
+
+    def setup(self):
+        num_nodes = self.options['num_nodes']
+        
+        self.add_input('soc', units=None, shape=(num_nodes,), desc='State of charge')
+        self.add_input('c_rate', units='1/h', shape=(num_nodes,), desc='C-rate of the cell')
+        self.add_output('ir0_cell', units='ohm', shape=(num_nodes,), desc='Internal resistance of the battery cell')
         
         self.declare_partials('*', '*', method='cs')
 
@@ -222,7 +260,7 @@ class IR0Interp2D(om.ExplicitComponent):
         test_points = np.column_stack([soc, c_rate])
         
         # Interpolate IR0
-        ir0_cell = self.rbf_interpolator(test_points)
+        ir0_cell = self._rbf_interpolator(test_points)
         
         outputs['ir0_cell'] = ir0_cell
 

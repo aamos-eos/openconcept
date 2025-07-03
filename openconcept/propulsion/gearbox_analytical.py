@@ -227,7 +227,7 @@ class PlanetaryGearbox(ExplicitComponent):
         partials['carrier_torque', 'turbine_torque'] = np.eye(nn) * 0
 
 
-class SimpleGearbox(ExplicitComponent):
+class Gearbox(ExplicitComponent):
     """
     A simplified gearbox component for single input/single output cases.
     

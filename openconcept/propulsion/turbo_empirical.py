@@ -162,6 +162,9 @@ class TurboFuelFlowRBF(om.ExplicitComponent):
         self.options.declare('throttle_set', default=True, desc='Set throttle or power for gas turbine')
         # Load data immediately when component is initialized
         TurboData.load_data(turbo_filename='openconcept/propulsion/empirical_data/PT6E-67XP-4_EngData.xlsx', sheet_name='CRZ')
+        
+        # Build shared interpolators once when class is first initialized
+        self._build_shared_interpolators()
 
     @classmethod
     def _build_shared_interpolators(cls):
@@ -181,15 +184,20 @@ class TurboFuelFlowRBF(om.ExplicitComponent):
         
         X_train = np.column_stack([alt_data, mach_data, disa_data, throttle_data])
         cls._dyn_fuel_flow_interpolator = RBFInterpolator(X_train, fuel_flow_data, kernel='thin_plate_spline')
-        cls._dyn_power_interpolator = RBFInterpolator(X_train, power_data_kW, kernel='thin_plate_spline')
+
+        print("Dynamic fuel flow interpolator built successfully!")
         
+        cls._dyn_power_interpolator = RBFInterpolator(X_train, power_data_kW, kernel='thin_plate_spline')
+        print("Dynamic power interpolator built successfully!")
         # Build idle interpolators
         idle_alt_data = TurboData.idle_alt_data__m
         idle_fuel_flow_data = TurboData.idle_fuel_flow_data__kgph
         idle_power_data = TurboData.idle_power_data__kW
         
         cls._idle_fuel_flow_interpolator = UnivariateSpline(idle_alt_data, idle_fuel_flow_data, s=0)
+        print("Idle fuel flow interpolator built successfully!")
         cls._idle_power_interpolator = UnivariateSpline(idle_alt_data, idle_power_data, s=0)
+        print("Idle power interpolator built successfully!")
         
         # Build static interpolators
         stat_alt_data = TurboData.stat_alt_data__m
@@ -200,7 +208,9 @@ class TurboFuelFlowRBF(om.ExplicitComponent):
         
         X_train_static = np.column_stack([stat_alt_data, stat_disa_data, stat_frac_data])
         cls._stat_fuel_flow_interpolator = RBFInterpolator(X_train_static, stat_fuel_flow_data, kernel='thin_plate_spline')
+        print("Static fuel flow interpolator built successfully!")
         cls._stat_power_interpolator = RBFInterpolator(X_train_static, stat_power_data_kW, kernel='thin_plate_spline')
+        print("Static power interpolator built successfully!")
         
         cls._interpolators_built = True
         print("Shared turbo interpolators built successfully!")
@@ -226,8 +236,7 @@ class TurboFuelFlowRBF(om.ExplicitComponent):
         # Declare partials
         self.declare_partials('*', '*', method='fd')
         
-        # Ensure shared interpolators are built (only happens once)
-        self._build_shared_interpolators()
+
 
     def compute(self, inputs, outputs):
         print("Computing Fuel Flow...")
@@ -357,54 +366,6 @@ class TurboFuelFlowFromPowerMetaModel(om.Group):
         fuel_flow_metamodel.add_output('fuel_flow_kgph', 200.0, training_data=TurboData.dyn_fuel_flow_data__kgph, units="kg/h", shape=(num_nodes,))
         
         self.add_subsystem('fuel_flow_metamodel', fuel_flow_metamodel, promotes=["*"])
-
-
-class ThrottleToPower(om.ExplicitComponent):
-    """
-    Simple component that converts throttle to mechanical power.
-    
-    Inputs
-    ------
-    throttle : array_like
-        Throttle fraction [0-1]
-    max_nac_power : array_like
-        Maximum nacelle power [kW]
-    
-    Outputs
-    -------
-    nac_mech_power : array_like
-        Mechanical power output [kW]
-    """
-    
-    def initialize(self):
-        self.options.declare('num_nodes', default=1, desc='Number of analysis points')
-    
-    def setup(self):
-        nn = self.options['num_nodes']
-        
-        # Inputs
-        self.add_input('throttle', val=0.6, units=None, desc='Throttle fraction', shape=(nn,))
-        self.add_input('max_nac_power', val=1000.0, units='kW', desc='Maximum nacelle power', shape=(nn,))
-        
-        # Outputs
-        self.add_output('nac_mech_power', val=600.0, units='kW', desc='Mechanical power output', shape=(nn,))
-        
-        # Declare partials
-        self.declare_partials('*', '*', method='exact')
-    
-    def compute(self, inputs, outputs):
-        throttle = inputs['throttle']
-        max_nac_power = inputs['max_nac_power']
-        
-        outputs['nac_mech_power'] = throttle * max_nac_power
-    
-    def compute_partials(self, inputs, partials):
-        throttle = inputs['throttle']
-        max_nac_power = inputs['max_nac_power']
-        
-        # Partial derivatives
-        partials['nac_mech_power', 'throttle'] = max_nac_power
-        partials['nac_mech_power', 'max_nac_power'] = throttle
 
 
 if __name__ == "__main__":

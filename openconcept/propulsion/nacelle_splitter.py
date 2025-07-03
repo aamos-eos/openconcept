@@ -8,7 +8,7 @@ class PowerSplitNacelle(ExplicitComponent):
 
     Inputs
     ------
-    total_power_out : float
+    mech_power_out : float
         Total power fed to the nacelle. (vector, W)
     power_rating_gt : float
         Maximum rated power of the gas turbine. (scalar, W)
@@ -89,7 +89,7 @@ class PowerSplitNacelle(ExplicitComponent):
 
     def setup(self):
         nn = self.options["num_nodes"]
-        self.add_input("total_power_out", units="W", desc="Total mechanical power produced by the nacelle", shape=(nn,))
+        self.add_input("mech_power_out", units="W", desc="Total mechanical power produced by the nacelle", shape=(nn,))
         self.add_input("power_rating_gt", val=99999999, units="W", desc="Gas turbine power rating")
         self.add_input("power_rating_em", val=99999999, units="W", desc="Electric motor power rating")
 
@@ -118,8 +118,8 @@ class PowerSplitNacelle(ExplicitComponent):
         weight_inc = self.options["weight_inc"]
         cost_inc = self.options["cost_inc"]
 
-        self.add_output("unit_power_out_gt", units="W", desc="Unit output power from gas turbine(s) shaft after gearbox", shape=(nn,))
-        self.add_output("unit_power_out_em", units="W", desc="Unit output power from electric motor(s) shaft after gearbox", shape=(nn,))
+        self.add_output("unit_mech_power_in_gt", units="W", desc="Unit output power from gas turbine(s) shaft after gearbox", shape=(nn,))
+        self.add_output("unit_mech_power_in_em", units="W", desc="Unit output power from electric motor(s) shaft after gearbox", shape=(nn,))
         self.add_output("component_cost_gt", units="USD", desc="Gas turbine component cost")
         self.add_output("component_cost_em", units="USD", desc="Electric motor component cost")
         self.add_output("component_weight_gt", units="kg", desc="Gas turbine component weight")
@@ -130,21 +130,21 @@ class PowerSplitNacelle(ExplicitComponent):
         if rule == "fraction":
             if bias == "gt":
                 self.declare_partials(
-                    ["unit_power_out_gt", "unit_power_out_em"], ["total_power_out", "power_split_fraction_gt"], rows=range(nn), cols=range(nn)
+                    ["unit_mech_power_in_gt", "unit_mech_power_in_em"], ["mech_power_out", "power_split_fraction_gt"], rows=range(nn), cols=range(nn)
                 )
             elif bias == "em":
                 self.declare_partials(
-                    ["unit_power_out_gt", "unit_power_out_em"], ["total_power_out", "power_split_fraction_em"], rows=range(nn), cols=range(nn)
+                    ["unit_mech_power_in_gt", "unit_mech_power_in_em"], ["mech_power_out", "power_split_fraction_em"], rows=range(nn), cols=range(nn)
                 )
             # end
         elif rule == "fixed":
             if bias == "gt":
                 self.declare_partials(
-                    ["unit_power_out_gt", "unit_power_out_em"], ["total_power_out", "power_split_amount_gt"], rows=range(nn), cols=range(nn)
+                    ["unit_mech_power_in_gt", "unit_mech_power_in_em"], ["mech_power_out", "power_split_amount_gt"], rows=range(nn), cols=range(nn)
                 )
             elif bias == "em":
                 self.declare_partials(
-                    ["unit_power_out_gt", "unit_power_out_em"], ["total_power_out", "power_split_amount_em"], rows=range(nn), cols=range(nn)
+                    ["unit_mech_power_in_gt", "unit_mech_power_in_em"], ["mech_power_out", "power_split_amount_em"], rows=range(nn), cols=range(nn)
                 )
             # end
 
@@ -152,8 +152,8 @@ class PowerSplitNacelle(ExplicitComponent):
         self.declare_partials("component_cost_em", "power_rating_em", val=cost_inc)
         self.declare_partials("component_weight_gt", "power_rating_gt", val=weight_inc)
         self.declare_partials("component_weight_em", "power_rating_em", val=weight_inc)
-        self.declare_partials("component_sizing_margin_gt", "total_power_out", rows=range(nn), cols=range(nn))
-        self.declare_partials("component_sizing_margin_em", "total_power_out", rows=range(nn), cols=range(nn))
+        self.declare_partials("component_sizing_margin_gt", "mech_power_out", rows=range(nn), cols=range(nn))
+        self.declare_partials("component_sizing_margin_em", "mech_power_out", rows=range(nn), cols=range(nn))
         self.declare_partials("component_sizing_margin_gt", "power_rating_gt")
         self.declare_partials("component_sizing_margin_em", "power_rating_em")
 
@@ -171,11 +171,11 @@ class PowerSplitNacelle(ExplicitComponent):
 
         if rule == "fraction":
             if bias == "gt":
-                unit_power_out_gt = inputs["total_power_out"] * inputs["power_split_fraction_gt"]  / eta_gt_prop
-                unit_power_out_em = inputs["total_power_out"] * (1 - inputs["power_split_fraction_gt"]) / nm / eta_em_prop
+                unit_mech_power_in_gt = inputs["mech_power_out"] * inputs["power_split_fraction_gt"]  / eta_gt_prop
+                unit_mech_power_in_em = inputs["mech_power_out"] * (1 - inputs["power_split_fraction_gt"]) / nm / eta_em_prop
             elif bias == "em":
-                unit_power_out_gt = inputs["total_power_out"] * (1 - inputs["power_split_fraction_em"]) / eta_gt_prop
-                unit_power_out_em = inputs["total_power_out"] * inputs["power_split_fraction_em"] / nm / eta_em_prop
+                unit_mech_power_in_gt = inputs["mech_power_out"] * (1 - inputs["power_split_fraction_em"]) / eta_gt_prop
+                unit_mech_power_in_em = inputs["mech_power_out"] * inputs["power_split_fraction_em"] / nm / eta_em_prop
             else:
                 msg = 'Specify either "gt" or "em" as power split bias'
                 raise ValueError(msg)
@@ -185,42 +185,42 @@ class PowerSplitNacelle(ExplicitComponent):
 
             if bias == "gt":
                 # Case where power requested from gas turbine is greater than total power needed from propeller
-                # if inputs['total_power_out'] < inputs['power_split_amount']:
-                over_supply_idx = np.where(inputs["total_power_out"] < inputs["power_split_amount"])
-                unit_power_out_gt = np.zeros(nn)
-                unit_power_out_em = np.zeros(nn)
-                unit_power_out_gt[over_supply_idx] = inputs["total_power_out"][over_supply_idx] / eta_gt_prop
-                unit_power_out_em[over_supply_idx] = np.zeros(nn)[over_supply_idx]
+                # if inputs['mech_power_out'] < inputs['power_split_amount']:
+                over_supply_idx = np.where(inputs["mech_power_out"] < inputs["power_split_amount"])
+                unit_mech_power_in_gt = np.zeros(nn)
+                unit_mech_power_in_em = np.zeros(nn)
+                unit_mech_power_in_gt[over_supply_idx] = inputs["mech_power_out"][over_supply_idx] / eta_gt_prop
+                unit_mech_power_in_em[over_supply_idx] = np.zeros(nn)[over_supply_idx]
 
                 # Case where power requested from gas turbine is less than total power needed from propeller
-                # if inputs['total_power_out'] >= inputs['power_split_amount']:
-                partial_supply_idx = np.where(inputs["total_power_out"] >= inputs["power_split_amount"])
-                unit_power_out_gt[partial_supply_idx] = inputs["power_split_amount"][partial_supply_idx] / eta_gt_prop
-                unit_power_out_em[partial_supply_idx] = (inputs["total_power_out"][partial_supply_idx] - inputs["power_split_amount"][partial_supply_idx]) / nm / eta_em_prop
+                # if inputs['mech_power_out'] >= inputs['power_split_amount']:
+                partial_supply_idx = np.where(inputs["mech_power_out"] >= inputs["power_split_amount"])
+                unit_mech_power_in_gt[partial_supply_idx] = inputs["power_split_amount"][partial_supply_idx] / eta_gt_prop
+                unit_mech_power_in_em[partial_supply_idx] = (inputs["mech_power_out"][partial_supply_idx] - inputs["power_split_amount"][partial_supply_idx]) / nm / eta_em_prop
             elif bias == "em":
                 # Case where power requested from electric motor is greater than total power needed from propeller
-                # if inputs['total_power_out'] < inputs['power_split_amount']:
-                over_supply_idx = np.where(inputs["total_power_out"] < inputs["power_split_amount"])
-                unit_power_out_gt = np.zeros(nn)
-                unit_power_out_em = np.zeros(nn)
-                unit_power_out_em[over_supply_idx] = inputs["total_power_out"][over_supply_idx] / nm / eta_em_prop
-                unit_power_out_gt[over_supply_idx] = np.zeros(nn)[over_supply_idx]
+                # if inputs['mech_power_out'] < inputs['power_split_amount']:
+                over_supply_idx = np.where(inputs["mech_power_out"] < inputs["power_split_amount"])
+                unit_mech_power_in_gt = np.zeros(nn)
+                unit_mech_power_in_em = np.zeros(nn)
+                unit_mech_power_in_em[over_supply_idx] = inputs["mech_power_out"][over_supply_idx] / nm / eta_em_prop
+                unit_mech_power_in_gt[over_supply_idx] = np.zeros(nn)[over_supply_idx]
 
                 # Case where power requested from electric motor is less than total power needed from propeller
-                # if inputs['total_power_out'] >= inputs['power_split_amount']:
-                partial_supply_idx = np.where(inputs["total_power_out"] >= inputs["power_split_amount"])
-                unit_power_out_em[partial_supply_idx] = inputs["power_split_amount"][partial_supply_idx] / nm / eta_em_prop
-                unit_power_out_gt[partial_supply_idx] = (inputs["total_power_out"][partial_supply_idx] - inputs["power_split_amount"][partial_supply_idx]) / eta_gt_prop
+                # if inputs['mech_power_out'] >= inputs['power_split_amount']:
+                partial_supply_idx = np.where(inputs["mech_power_out"] >= inputs["power_split_amount"])
+                unit_mech_power_in_em[partial_supply_idx] = inputs["power_split_amount"][partial_supply_idx] / nm / eta_em_prop
+                unit_mech_power_in_gt[partial_supply_idx] = (inputs["mech_power_out"][partial_supply_idx] - inputs["power_split_amount"][partial_supply_idx]) / eta_gt_prop
         # end
-        outputs["unit_power_out_gt"] = unit_power_out_gt
-        outputs["unit_power_out_em"] = unit_power_out_em
+        outputs["unit_mech_power_in_gt"] = unit_mech_power_in_gt
+        outputs["unit_mech_power_in_em"] = unit_mech_power_in_em
 
         outputs["component_cost_gt"] = inputs["power_rating_gt"] * cost_inc + cost_base
         outputs["component_cost_em"] = inputs["power_rating_em"] * cost_inc + cost_base
         outputs["component_weight_gt"] = inputs["power_rating_gt"] * weight_inc + weight_base
         outputs["component_weight_em"] = inputs["power_rating_em"] * weight_inc + weight_base
-        outputs["component_sizing_margin_gt"] = inputs["total_power_out"]  / inputs["power_rating_gt"] / eta_gt_prop
-        outputs["component_sizing_margin_em"] = inputs["total_power_out"] / inputs["power_rating_em"] / eta_em_prop
+        outputs["component_sizing_margin_gt"] = inputs["mech_power_out"]  / inputs["power_rating_gt"] / eta_gt_prop
+        outputs["component_sizing_margin_em"] = inputs["mech_power_out"] / inputs["power_rating_em"] / eta_em_prop
 
     def compute_partials(self, inputs, J):
         nn = self.options["num_nodes"]
@@ -232,19 +232,19 @@ class PowerSplitNacelle(ExplicitComponent):
 
         if rule == "fraction":
             if bias == "gt":
-                J["unit_power_out_gt", "total_power_out"] = inputs["power_split_fraction_gt"] / eta_gt_prop
-                J["unit_power_out_em", "total_power_out"] = (1 - inputs["power_split_fraction_gt"]) / nm / eta_em_prop
-                J["unit_power_out_gt", "power_split_fraction_gt"] = inputs["total_power_out"] / eta_gt_prop
-                J["unit_power_out_em", "power_split_fraction_gt"] = -inputs["total_power_out"] / nm / eta_em_prop
+                J["unit_mech_power_in_gt", "mech_power_out"] = inputs["power_split_fraction_gt"] / eta_gt_prop
+                J["unit_mech_power_in_em", "mech_power_out"] = (1 - inputs["power_split_fraction_gt"]) / nm / eta_em_prop
+                J["unit_mech_power_in_gt", "power_split_fraction_gt"] = inputs["mech_power_out"] / eta_gt_prop
+                J["unit_mech_power_in_em", "power_split_fraction_gt"] = -inputs["mech_power_out"] / nm / eta_em_prop
             elif bias == "em":
-                J["unit_power_out_gt", "total_power_out"] = (1 - inputs["power_split_fraction_em"]) / eta_gt_prop
-                J["unit_power_out_em", "total_power_out"] = inputs["power_split_fraction_em"] / nm / eta_em_prop
-                J["unit_power_out_gt", "power_split_fraction_em"] = -inputs["total_power_out"] / eta_gt_prop
-                J["unit_power_out_em", "power_split_fraction_em"] = inputs["total_power_out"] / nm / eta_em_prop
+                J["unit_mech_power_in_gt", "mech_power_out"] = (1 - inputs["power_split_fraction_em"]) / eta_gt_prop
+                J["unit_mech_power_in_em", "mech_power_out"] = inputs["power_split_fraction_em"] / nm / eta_em_prop
+                J["unit_mech_power_in_gt", "power_split_fraction_em"] = -inputs["mech_power_out"] / eta_gt_prop
+                J["unit_mech_power_in_em", "power_split_fraction_em"] = inputs["mech_power_out"] / nm / eta_em_prop
         elif rule == "fixed":
             if bias == "gt":
-                over_supply_idx = np.where(inputs["total_power_out"] < inputs["power_split_amount"])
-                enough_idx = np.where(inputs["total_power_out"] >= inputs["power_split_amount"])
+                over_supply_idx = np.where(inputs["mech_power_out"] < inputs["power_split_amount"])
+                enough_idx = np.where(inputs["mech_power_out"] >= inputs["power_split_amount"])
                 
                 Jpo_gt_pi = np.zeros(nn)
                 Jpo_gt_ps = np.zeros(nn)
@@ -260,8 +260,8 @@ class PowerSplitNacelle(ExplicitComponent):
                 Jpo_em_ps[partial_supply_idx] = -np.ones(nn)[partial_supply_idx] / nm / eta_em_prop
                 Jpo_em_pi[partial_supply_idx] = np.ones(nn)[partial_supply_idx] / nm / eta_em_prop
             if bias == "em":
-                over_supply_idx = np.where(inputs["total_power_out"] < inputs["power_split_amount"])
-                partial_supply_idx = np.where(inputs["total_power_out"] >= inputs["power_split_amount"])
+                over_supply_idx = np.where(inputs["mech_power_out"] < inputs["power_split_amount"])
+                partial_supply_idx = np.where(inputs["mech_power_out"] >= inputs["power_split_amount"])
                 
                 Jpo_gt_pi = np.zeros(nn)
                 Jpo_gt_ps = np.zeros(nn)
@@ -278,14 +278,14 @@ class PowerSplitNacelle(ExplicitComponent):
                 Jpo_em_pi[partial_supply_idx] = np.ones(nn)[partial_supply_idx] / nm / eta_em_prop
             # end
 
-            J["unit_power_out_gt", "total_power_out"] = Jpo_gt_pi
-            J["unit_power_out_gt", "power_split_amount"] = Jpo_gt_ps
-            J["unit_power_out_em", "total_power_out"] = Jpo_em_pi
-            J["unit_power_out_em", "power_split_amount"] = Jpo_em_ps
-        J["component_sizing_margin_gt", "total_power_out"] = 1 / inputs["power_rating_gt"]
-        J["component_sizing_margin_em", "total_power_out"] = 1 / inputs["power_rating_em"]
-        J["component_sizing_margin_gt", "power_rating_gt"] = -(inputs["total_power_out"] / inputs["power_rating_gt"] ** 2)
-        J["component_sizing_margin_em", "power_rating_em"] = -(inputs["total_power_out"] / inputs["power_rating_em"] ** 2)
+            J["unit_mech_power_in_gt", "mech_power_out"] = Jpo_gt_pi
+            J["unit_mech_power_in_gt", "power_split_amount"] = Jpo_gt_ps
+            J["unit_mech_power_in_em", "mech_power_out"] = Jpo_em_pi
+            J["unit_mech_power_in_em", "power_split_amount"] = Jpo_em_ps
+        J["component_sizing_margin_gt", "mech_power_out"] = 1 / inputs["power_rating_gt"]
+        J["component_sizing_margin_em", "mech_power_out"] = 1 / inputs["power_rating_em"]
+        J["component_sizing_margin_gt", "power_rating_gt"] = -(inputs["mech_power_out"] / inputs["power_rating_gt"] ** 2)
+        J["component_sizing_margin_em", "power_rating_em"] = -(inputs["mech_power_out"] / inputs["power_rating_em"] ** 2)
 
 
 def test_power_split_nacelle():
@@ -302,7 +302,7 @@ def test_power_split_nacelle():
     ivc = om.IndepVarComp()
     
     # Add independent variables
-    ivc.add_output('total_power_out', val=np.array([1000, 1500, 2000, 2500, 3000]), units='W', desc='Total power')
+    ivc.add_output('mech_power_out', val=np.array([1000, 1500, 2000, 2500, 3000]), units='W', desc='Total power')
     ivc.add_output('power_rating_gt', val=2000.0, units='W', desc='Gas turbine rating')
     ivc.add_output('power_rating_em', val=1000.0, units='W', desc='Electric motor rating')
     ivc.add_output('power_split_fraction_gt', val=np.array([0.7, 0.6, 0.5, 0.4, 0.3]), desc='GT power fraction')
@@ -326,13 +326,13 @@ def test_power_split_nacelle():
     prob.run_model()
     
     # Get results
-    gt_power = prob.get_val('unit_power_out_gt')
-    em_power = prob.get_val('unit_power_out_em')
+    gt_power = prob.get_val('unit_mech_power_in_gt')
+    em_power = prob.get_val('unit_mech_power_in_em')
     gt_margin = prob.get_val('component_sizing_margin_gt')
     em_margin = prob.get_val('component_sizing_margin_em')
     
     print(f"\nResults (Fraction rule, GT bias):")
-    print(f"Total Power (W): {prob.get_val('total_power_out')}")
+    print(f"Total Power (W): {prob.get_val('mech_power_out')}")
     print(f"GT Fraction: {prob.get_val('power_split_fraction_gt')}")
     print(f"GT Unit Power (W): {gt_power}")
     print(f"EM Unit Power (W): {em_power}")

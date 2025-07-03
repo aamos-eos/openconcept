@@ -79,6 +79,9 @@ class PropellerRBFInterpolator(om.ExplicitComponent):
         self.options.declare('power_set', default=False, desc='power is set (input)')
         self.options.declare('rpm_set', default=False, desc='rpm is set (input)')
         self.options.declare('thrust_set', default=True, desc='thrust is set (input)')
+        
+        # Build shared interpolator once when class is first initialized
+        self._build_shared_interpolator()
     
     @classmethod
     def _build_shared_interpolator(cls):
@@ -133,9 +136,6 @@ class PropellerRBFInterpolator(om.ExplicitComponent):
         # Additional outputs
         self.add_output('J', val=0.5, desc='Advance ratio matrix', shape=(num_nodes))
         self.add_output('thrust_calc', val=10000.0, units='N', desc='Calculated thrust', shape=(num_nodes))
-        
-        # Ensure shared interpolator is built (only happens once)
-        self._build_shared_interpolator()
         
         # Use finite difference for all partials since optimization is involved
         self.declare_partials('*', '*', method='fd')

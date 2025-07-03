@@ -8,7 +8,7 @@ from openconcept.propulsion.nacelle_splitter import PowerSplitNacelle
 from openmdao.api import Group, BalanceComp, IndepVarComp, n2, ExplicitComponent
 import numpy as np
 from openconcept.propulsion.battery_data import BatteryData
-from openconcept.propulsion.gearbox_analytical import SimpleGearbox, PlanetaryGearbox, FlippedPlanetaryGearbox
+from openconcept.propulsion.gearbox_analytical import Gearbox, PlanetaryGearbox, FlippedPlanetaryGearbox
 
 # Flipped planetary gearbox computes input motor RPM and torque from output (carrier) RPM, output power, turbine RPM, and gear ratios
 # Planetary gearbox computes output carrier RPM and torque from input motor and turbine RPM & torque and respective gear ratios
@@ -19,52 +19,6 @@ BatteryData.load_data(bat_filename='openconcept/propulsion/empirical_data/inHous
                       config_sheetname='battery_config')
 
 
-class ThrottleToPower(ExplicitComponent):
-    """
-    Simple component that converts throttle to mechanical power.
-    
-    Inputs
-    ------
-    throttle : array_like
-        Throttle fraction [0-1]
-    max_rated_power : array_like
-        Maximum rated power [kW]
-    
-    Outputs
-    -------
-    mech_power_out : array_like
-        Mechanical power output [kW]
-    """
-    
-    def initialize(self):
-        self.options.declare('num_nodes', default=1, desc='Number of analysis points')
-    
-    def setup(self):
-        nn = self.options['num_nodes']
-        
-        # Inputs
-        self.add_input('throttle', shape=(nn,), units=None, desc='Throttle fraction')
-        self.add_input('max_rated_power', shape=(nn,), units='kW', desc='Maximum nacelle power')
-        
-        # Outputs
-        self.add_output('mech_power_out', shape=(nn,), units='kW', desc='Mechanical power output')
-        
-        # Declare partials
-        self.declare_partials('*', '*', method='exact')
-    
-    def compute(self, inputs, outputs):
-        throttle = inputs['throttle']
-        max_rated_power = inputs['max_rated_power']
-        
-        outputs['mech_power_out'] = throttle * max_rated_power
-    
-    def compute_partials(self, inputs, partials):
-        throttle = inputs['throttle']
-        max_rated_power = inputs['max_rated_power']
-        
-        # Partial derivatives
-        partials['mech_power_out', 'throttle'] = max_rated_power
-        partials['mech_power_out', 'max_rated_power'] = throttle
 
 
 class ParallelHybridNacelle(Group):
@@ -76,55 +30,105 @@ class ParallelHybridNacelle(Group):
                              'fraction' means that the power split is a fraction of the total power.\
                              'fixed' means that the power split is derived from a fixed amount of power.")
         self.options.declare("bias", default="gt", desc="Determines which component the power split rule is with respect to")
-        self.options.declare("thrust_set", default=False, desc="Solve for power from thrust input")
-        self.options.declare("power_set", default=False, desc="Solve for thrust from power input")
-        self.options.declare("rpm_set", default=False, desc="Solve for torque from RPM input")
-        self.options.declare("throttle_set", default=False, desc="Solve for power from throttle input")
+        self.options.declare("prop_thrust_set", default=False, desc="Solve for prop thrust from thrust input")
+        self.options.declare("nac_power_set", default=False, desc="Solve for power from power input")
+        self.options.declare("prop_rpm_set", default=False, desc="Solve for torque from RPM input")
+        self.options.declare("nac_throttle_set", default=False, desc="Solve for throttle from throttle input")
+        self.options.declare("motor_gb_efficiency", default=1, desc="Efficiency of motor reduction gearbox")
+        self.options.declare("turbine_gb_efficiency", default=1, desc="Efficiency of turbine reduction gearbox")
+        self.options.declare("motor_prop_gb_efficiency", default=0.95, desc="Efficiency of motor to propeller planetary gearbox")
+        self.options.declare("turbine_prop_gb_efficiency", default=0.95, desc="Efficiency of turbine to propeller planetary gearbox")
+        self.options.declare("gt_throttle_set", default=False, desc="gas turbine takes throttle as input. Otherwise, power is input")
+        self.options.declare("motor_torque_rpm_set", default=False, desc="motor takes torque and rpm as input. Otherwise, power is input")
 
     def setup(self):
         nn = self.options["num_nodes"]
         nm = self.options["num_em_per_nac"]
         rule = self.options["rule"]
         bias = self.options["bias"]
-        thrust_set = self.options["thrust_set"]
-        power_set = self.options["power_set"]
-        rpm_set = self.options["rpm_set"]
-        throttle_set = self.options["throttle_set"]
+        prop_thrust_set = self.options["prop_thrust_set"]
+        nac_power_set = self.options["nac_power_set"]
+        prop_rpm_set = self.options["prop_rpm_set"]
+        nac_throttle_set = self.options["nac_throttle_set"]
+        motor_gb_eta = self.options["motor_gb_efficiency"]
+        turbine_gb_eta = self.options["turbine_gb_efficiency"]
+        motor_prop_gb_eta = self.options["motor_prop_gb_efficiency"]
+        turbine_prop_gb_eta = self.options["turbine_prop_gb_efficiency"]
+        gt_throttle_set = self.options["gt_throttle_set"]
+        motor_torque_rpm_set = self.options["motor_torque_rpm_set"]
 
-        if throttle_set:
-            self.add_subsystem("throttle_to_power", ThrottleToPower(num_nodes=nn), promotes_inputs=["throttle", "max_rated_power"], promotes_outputs=["mech_power_out"])
-        # end
 
+        if nac_throttle_set:
+            nacelle_throttle_to_power = ElementMultiplyDivideComp()
+            nacelle_throttle_to_power.add_equation(output_name="mech_power_out", 
+                                    input_names=["throttle", "max_rated_power"], 
+                                    vec_size=[nn,1],
+                                    input_units=[None, "W"],
+                                    divide=[False, False])
+            self.add_subsystem("nacelle_throttle_to_power", nacelle_throttle_to_power, promotes_inputs=["*"], promotes_outputs=["*"])        # end
         # define design variables that are independent of flight condition or control states
         
-        for i in range(nm):
-            self.add_subsystem(f"motor{i+1}", EmpiricalMotor(num_nodes=nn, torque_rpm_set=rpm_set), promotes_inputs=[])
+
+
+
+        if not prop_thrust_set and not nac_power_set and not nac_throttle_set:
+            # If individual motor and turbine component powers are specified
+            add_shaft_powers = AddSubtractComp(units="W")
+            add_shaft_powers.add_equation(output_name="total_mech_power_out", 
+                                    input_names=["unit_mech_power_in_em", 
+                                                "unit_mech_power_in_gt"], 
+                                    vec_size=nn,
+                                    scaling_factors=[nm * motor_gb_eta * motor_prop_gb_eta, 1 * turbine_gb_eta * turbine_prop_gb_eta])
+            self.add_subsystem("add_shaft_powers", add_shaft_powers, promotes_inputs=["*"], promotes_outputs=["*"])
+        else:
+            self.add_subsystem("hybrid_split", PowerSplitNacelle(rule=rule, num_nodes=nn, bias=bias, num_em_per_nac=nm), promotes_inputs=["*"], promotes_outputs=["*"])
         # end
 
+        for i in range(nm):
+            self.add_subsystem(f"motor{i+1}", EmpiricalMotor(num_nodes=nn, torque_rpm_set=motor_torque_rpm_set), promotes_inputs=[])
+        # end
+
+            
+
+        # If individual motor and turbine component powers are determined
+        scale_mech_power_cmd = ElementMultiplyDivideComp()
+        scale_mech_power_cmd.add_equation(output_name="prop_power_in", 
+                                input_names=["mech_power_out","carrier_efficiency"], 
+                                vec_size=[nn,1],
+                                input_units=["W", None],
+                                divide=[False, False])
+        self.add_subsystem("scale_mech_power_cmd", scale_mech_power_cmd, promotes_inputs=["*"], promotes_outputs=["*"])
+
+
+
         # Gas Turbine Gearbox
+        """
         self.add_subsystem('turbo_gearbox', SimpleGearbox(num_nodes=nn), promotes=[])
 
 
 
         # Planetary Gearbox for turbine and motor combination
-        if thrust_set:
+        if prop_thrust_set:
             self.add_subsystem('planetary_gearbox', FlippedPlanetaryGearbox(num_nodes=nn, n_motors=nm), promotes=['motor_gear_ratio','turbine_gear_ratio'])
-        elif power_set:
+        elif nac_power_set:
             # Power is input. Solve for efficiency
             self.add_subsystem('planetary_gearbox', PlanetaryGearbox(num_nodes=nn, n_motors=nm), promotes=['motor_gear_ratio','turbine_gear_ratio'])
         # end
+        """
 
-        self.add_subsystem("turb", TurboFuelFlowRBF(num_nodes=nn), promotes_outputs=[], promotes_inputs=["fltcond|*"])
+        # If nacelle throttle is not set, then 
+
+        self.add_subsystem("turb", TurboFuelFlowRBF(num_nodes=nn, throttle_set=gt_throttle_set), promotes_outputs=[], promotes_inputs=["fltcond|*"])
 
         self.add_subsystem("prop", EmpiricalPropeller(num_nodes=nn,
-                                                      thrust_set = thrust_set,
-                                                      power_set = power_set,
-                                                      rpm_set = rpm_set, 
+                                                      thrust_set = prop_thrust_set,
+                                                      power_set = nac_power_set,
+                                                      rpm_set = prop_rpm_set, 
                                                       use_dynamic_data = True), promotes_inputs=["fltcond|*"])
 
+        self.connect("prop_power_in", "prop.power")
 
         # Organize power split between turbo and electric motor for each nacelle
-        self.add_subsystem("hybrid_split", PowerSplitNacelle(rule=rule, num_nodes=nn, bias=bias, num_em_per_nac=nm), promotes_inputs=["*"], promotes_outputs=["*"])
         #self.connect("prop.shaft_power_in", "hybrid_split.power_in")
         # end
 
@@ -169,10 +173,12 @@ class QuadParallelHybridElectricPropulsionSystem(Group):
                              'fixed' means that the power split is derived from a fixed amount of power.")
         self.options.declare("bias", default="gt", desc="Determines which component the power split rule is with respect to")
         self.options.declare("mode", default="mode_in", desc="Mode for motor input. 'torque_speed_in' means that the motor input is torque and speed. 'power_in' means that the motor input is power.")
-        self.options.declare("throttle_set", default=False, desc="Solve for power from throttle input")
-        self.options.declare("power_set", default=False, desc="Solve for power from power input")
-        self.options.declare("rpm_set", default=False, desc="Solve for power from rpm input")
-        self.options.declare("thrust_set", default=False, desc="Solve for power from thrust input")
+        self.options.declare("nac_throttle_set", default=False, desc="Solve for power from throttle input")
+        self.options.declare("nac_power_set", default=False, desc="Solve for power from power input")
+        self.options.declare("prop_rpm_set", default=False, desc="Solve for power from rpm input")
+        self.options.declare("prop_thrust_set", default=False, desc="Solve for power from thrust input")
+        self.options.declare("gt_throttle_set", default=False, desc="gas turbine takes throttle as input. Otherwise, power is input")
+        self.options.declare("motor_torque_rpm_set", default=False, desc="motor takes torque and rpm as input. Otherwise, power is input")
 
     def setup(self):
         nn = self.options["num_nodes"]
@@ -180,10 +186,12 @@ class QuadParallelHybridElectricPropulsionSystem(Group):
         nm = self.options["num_em_per_nac"]
         rule = self.options["rule"]
         bias = self.options["bias"]
-        throttle_set = self.options["throttle_set"]
-        power_set = self.options["power_set"]
-        rpm_set = self.options["rpm_set"]
-        thrust_set = self.options["thrust_set"]
+        nac_throttle_set = self.options["nac_throttle_set"]
+        nac_power_set = self.options["nac_power_set"]
+        prop_rpm_set = self.options["prop_rpm_set"]
+        prop_thrust_set = self.options["prop_thrust_set"]
+        gt_throttle_set = self.options["gt_throttle_set"]
+        motor_torque_rpm_set = self.options["motor_torque_rpm_set"]
 
 
 
@@ -194,10 +202,9 @@ class QuadParallelHybridElectricPropulsionSystem(Group):
             ["ac|propulsion|generator|rating", "gen_rating", 250.0, "kW"],
             ["ac|weights|W_battery", "batt_weight", 2000, "kg"],
             ["ac|propulsion|battery|specific_energy", "specific_energy", 300, "W*h/kg"],
-            ["ac|propulsion|battery|n_strngs", "n_strngs", 4, None],
-            ["ac|propulsion|battery|n_motors", "n_motors", 4, None],
-            ["ac|propulsion|battery|rloop_motor_dc_in", "rloop_motor_dc_in", 0.001 * np.ones(nn), "ohm"],
             ["ac|propulsion|battery|n_str", "n_str", 4, None],
+            ["ac|propulsion|battery|n_motor", "n_motor", 4, None],
+            ["ac|propulsion|battery|rloop_motor_dc_in", "rloop_motor_dc_in", 0.001 * np.ones(nn), "ohm"],
             ["ac|propulsion|battery|eta_converter", "eta_converter", 0.95 * np.ones(nn), None],
             ["ac|propulsion|battery|cell_capacity", "cell_capacity", 29.97, "A*h"],
             ["ac|propulsion|battery|t_cell_init", "t_cell_init", 30, "K"],
@@ -213,6 +220,7 @@ class QuadParallelHybridElectricPropulsionSystem(Group):
             ["ac|propulsion|turbine|gear_ratio", "turbine_gear_ratio", 20, None],
             ["ac|propulsion|motor|torque_cmd", "torque_cmd", 5000 * np.ones(nn), "N*m"],
             ["ac|propulsion|motor|rpm", "motor_rpm", 1000 * np.ones(nn), "rpm"],
+            ["ac|propulsion|carrier_gear_efficiency", "carrier_gear_efficiency", 0.95, None],
         ]
         
         self.add_subsystem("dvs", DVLabel(dvlist), promotes_inputs=["*"], promotes_outputs=["*"])
@@ -223,11 +231,13 @@ class QuadParallelHybridElectricPropulsionSystem(Group):
                                                                       num_em_per_nac=nm, 
                                                                       rule=rule, 
                                                                       bias=bias, 
-                                                                      throttle_set=throttle_set, 
-                                                                      power_set=power_set, 
-                                                                      rpm_set=rpm_set,
-                                                                      thrust_set=thrust_set), 
-                                                                      promotes_inputs=["fltcond|*"], 
+                                                                      nac_throttle_set=nac_throttle_set, 
+                                                                      nac_power_set=nac_power_set, 
+                                                                      prop_rpm_set=prop_rpm_set,
+                                                                      prop_thrust_set=prop_thrust_set,
+                                                                      gt_throttle_set=gt_throttle_set,
+                                                                      motor_torque_rpm_set=motor_torque_rpm_set), 
+                                                                      promotes_inputs=["fltcond|*",], 
                                                                       promotes_outputs=[])
         # end
 
@@ -263,18 +273,23 @@ class QuadParallelHybridElectricPropulsionSystem(Group):
         self.add_subsystem("add_power", subsys=addpower, promotes_outputs=["*"])
 
         self.add_subsystem(
-            "batt1", DischargeEmpiricalBattery(num_nodes=nn, v_cutoff=2.5), promotes_inputs=[]
+            "batt1", DischargeEmpiricalBattery(num_nodes=nn, v_cutoff=2.5), promotes_inputs=['*']
         )
         input_motor_weight_names_str = []
         input_prop_weight_names_str = []
         input_turbine_weight_names_str = []
+
+        input_motor_elec_power_names_str = []
         for i_p in range(npp):
             # Connect Electrical Loads for Motor
             for i_m in range(nm):
                 self.connect(f"nacelle{i_p+1}.motor{i_m+1}.elec_power", f"add_power.motor{i_p+1}_{i_m+1}_elec_load")
                 input_motor_weight_names_str.append(f"nacelle{i_p+1}.motor{i_m+1}_weight")
+                input_motor_elec_power_names_str.append(f"nacelle{i_p+1}.motor{i_m+1}.elec_power")
                 self.connect("batt1.v_motor", f"nacelle{i_p+1}.motor{i_m+1}.voltage")
-                self.connect(f"nacelle{i_p+1}.motor{i_m+1}.torque", f"nacelle{i_p+1}.planetary_gearbox.motor{i_m+1}_torque")
+                self.connect(f"nacelle{i_p+1}.unit_mech_power_in_em", f"nacelle{i_p+1}.motor{i_m+1}.mech_power")
+
+                #self.connect(f"nacelle{i_p+1}.motor{i_m+1}.torque", f"nacelle{i_p+1}.planetary_gearbox.motor{i_m+1}_torque")
                 #self.connect(f"nacelle1{i_p+1}.motor{i_m+1}.rpm", f"nacelle{i_p+1}.planetary_gearbox.motor{i_m+1}_rpm")
 
                 
@@ -286,6 +301,9 @@ class QuadParallelHybridElectricPropulsionSystem(Group):
             self.connect("prop_diameter", f"nacelle{i_p+1}.prop.diameter")
             self.connect("motor_rating", f"nacelle{i_p+1}.power_rating_em")
             self.connect("eng_rating", f"nacelle{i_p+1}.power_rating_gt")
+            self.connect("carrier_gear_efficiency",f"nacelle{i_p+1}.carrier_efficiency")
+            self.connect(f"nacelle{i_p+1}.prop.thrust_calc", f"add_power.prop{i_p+1}_thrust")
+            #self.connect(f"nacelle1.{i}", f"nacelle{i_p+1}.unit_mech_power_in_gt")
             #self.connect(f"nacelle{i_p+1}|power_split_fraction", f"nacelle{i_p+1}.{power_split_fraction_name}")
             #self.connect("num_gt_per_nac", f"nacelle{i_p+1}.num_gt_per_nac")
             #self.connect("num_em_per_nac", f"nacelle{i_p+1}.num_em_per_nac")
@@ -293,20 +311,9 @@ class QuadParallelHybridElectricPropulsionSystem(Group):
 
 
 
-        self.add_subsystem(
-            "eng_throttle_set",
-            BalanceComp(
-                name="eng_throttle",
-                val=np.ones((nn,)) * 0.5,
-                units=None,
-                eq_units="kW",
-                rhs_name="gt_power_required",
-                lhs_name="gt_power_available",
-            ),
-        )
-        #self.connect("hybrid_split.power_out_B", "eng_throttle_set.gt_power_required")
-        #self.connect("nacelle.turb.elec_power_out", "eng_throttle_set.gt_power_available")
-        #self.connect("eng_throttle_set.eng_throttle", "eng1.throttle")
+        #self.connect("hybrid_split.power_out_B", "eng_nac_throttle_set.gt_power_required")
+        #self.connect("nacelle.turb.elec_power_out", "eng_nac_throttle_set.gt_power_available")
+        #self.connect("eng_nac_throttle_set.eng_throttle", "eng1.throttle")
 
         # Connect Weights
         addweights = AddSubtractComp(
@@ -318,6 +325,14 @@ class QuadParallelHybridElectricPropulsionSystem(Group):
         addweights.add_equation(
             output_name="turbine_weight", input_names=input_turbine_weight_names_str, units="kg"
         )
+
+        # Sum Electrical power
+        add_elec_power = AddSubtractComp()
+        add_elec_power.add_equation(
+            output_name="p_train_elec", input_names=input_motor_elec_power_names_str
+        )
+
+
         #self.add_subsystem("add_weights", subsys=addweights, promotes_inputs=["*"], promotes_outputs=["*"])
 
         #relabel = [["hybrid_split_A_in", "battery_load", np.ones(nn) * 260.0, "kW"]]
@@ -417,10 +432,9 @@ if __name__ == "__main__":
     bat_data = BatteryData.get_data(bat_filename='openconcept/propulsion/empirical_data/inHouse_battery_1motorConfig_208s27p_4grp_to_each_nacelle.xlsx', 
                                     cell_sheetname='BOL_cell_fct_CRate', 
                                     config_sheetname='battery_config')
-    ivc.add_output('ac|propulsion|battery|n_strngs', 4, desc='number of battery strings')
-    ivc.add_output('ac|propulsion|battery|n_motors', 4, desc='Number of electric motors')
+    ivc.add_output('ac|propulsion|battery|n_str', 4, desc='number of battery strings')
+    ivc.add_output('ac|propulsion|battery|n_motor', 4, desc='Number of electric motors')
     ivc.add_output('ac|propulsion|battery|rloop_motor_dc_in', 0.001 * np.ones(num_nodes), units='ohm', desc='DC loop resistance to each motor')
-    ivc.add_output('ac|propulsion|battery|n_str', bat_data.n_str, desc='number of battery strings')
     ivc.add_output('dtime', 1 * np.ones(num_nodes), units='s', desc='time step')
     ivc.add_output('ac|propulsion|battery|eta_converter', 0.95 * np.ones(num_nodes), units=None, desc='efficiency of the converter')
 
@@ -434,12 +448,26 @@ if __name__ == "__main__":
     ivc.add_output('ac|propulsion|battery|cp_cell', bat_data.cp_cell, units='J/kg/K', desc='Specific heat capacity of the cell')
     ivc.add_output('ac|propulsion|battery|q_cool_bat', 25 * np.ones(num_nodes), units='kW', desc='Cooling power of the battery')
     ivc.add_output('ac|propulsion|battery|soc_init', bat_data.soc_init, units=None, desc='Initial state of charge of the battery')
+    ivc.add_output('ac|propulsion|battery|i_cell_charge_lim', 700, units='A', desc='Constant current setpoint (pack level)')
+    ivc.add_output('ac|propulsion|battery|v_cell_charge_lim', 860, units='V', desc='Constant voltage setpoint (pack level)')
+    ivc.add_output('ac|propulsion|battery|n_series_per_str', bat_data.n_series_per_str, desc='Number of cells in series')
+    ivc.add_output('ac|propulsion|battery|n_parallel_per_str', bat_data.n_parallel_per_str, desc='Number of cells in parallel')
     
     # Power split fraction
     ivc.add_output('nacelle1|power_split_fraction', val=0.5 * np.ones(num_nodes), units=None)
     ivc.add_output('nacelle2|power_split_fraction', val=0.5 * np.ones(num_nodes), units=None)
     ivc.add_output('nacelle3|power_split_fraction', val=0.5 * np.ones(num_nodes), units=None)
     ivc.add_output('nacelle4|power_split_fraction', val=0.5 * np.ones(num_nodes), units=None)
+
+    # Propeller Inputs
+    ivc.add_output('nacelle1|prop_rpm', val=1000.0 * np.ones(num_nodes), units='rpm', desc='Propeller RPM')
+    ivc.add_output('nacelle2|prop_rpm', val=1000.0 * np.ones(num_nodes), units='rpm', desc='Propeller RPM')
+    ivc.add_output('nacelle3|prop_rpm', val=1000.0 * np.ones(num_nodes), units='rpm', desc='Propeller RPM')
+    ivc.add_output('nacelle4|prop_rpm', val=1000.0 * np.ones(num_nodes), units='rpm', desc='Propeller RPM')
+
+    # Gearbox Efficiency
+    ivc.add_output('ac|propulsion|carrier_gear_efficiency', 0.95, units=None, desc='Carrier gear in planetary gearbox efficiency')
+
 
 
     # Nacelle power
@@ -455,15 +483,19 @@ if __name__ == "__main__":
     nm = 2 # num motors per nacelle
     rule = "fraction"
     bias = "gt"
-    power_set = True # When true, power is an input. Thrust is an output
-    thrust_set = False # When true, thrust is an input. Power is an output
-    throttle_set = True # When true, nacelle power = max power * throttle. else, nacelle power out is defined. 
+    nac_power_set = True # When true, power is an input. Thrust is an output
+    prop_rpm_set = False
+    prop_thrust_set = False # When true, thrust is an input. Power is an output
+    nac_throttle_set = True # When true, nacelle power = max power * throttle. else, nacelle power out is defined. 
+    gt_throttle_set = True
+    motor_torque_rpm_set = False
 
     nac_throttle = np.ones((num_nodes,)) * 0.5
+    gt_throttle = np.ones((num_nodes,)) * 0.5
     nac_mech_power__kW = p_max_nac_kW * nac_throttle
 
-    if power_set:
-        if throttle_set:
+    if nac_power_set:
+        if nac_throttle_set:
             ivc.add_output('nacelle1|throttle', nac_throttle, units=None)
             ivc.add_output('nacelle2|throttle', nac_throttle, units=None)
             ivc.add_output('nacelle3|throttle', nac_throttle, units=None)
@@ -474,6 +506,11 @@ if __name__ == "__main__":
             ivc.add_output('nacelle3|total_mech_power_out', nac_mech_power__kW, units='kW')
             ivc.add_output('nacelle4|total_mech_power_out', nac_mech_power__kW, units='kW')
     # end
+
+    ivc.add_output('nacelle1|gt_throttle', gt_throttle, units=None)
+    ivc.add_output('nacelle2|gt_throttle', gt_throttle, units=None)
+    ivc.add_output('nacelle3|gt_throttle', gt_throttle, units=None)
+    ivc.add_output('nacelle4|gt_throttle', gt_throttle, units=None)
 
 
 
@@ -487,9 +524,13 @@ if __name__ == "__main__":
                                                    num_em_per_nac=nm, 
                                                    rule=rule, 
                                                    bias=bias, 
-                                                   power_set = power_set,
-                                                   thrust_set = thrust_set,
-                                                   throttle_set = throttle_set),
+                                                   nac_power_set = nac_power_set,
+                                                   prop_thrust_set = prop_thrust_set,
+                                                   nac_throttle_set = nac_throttle_set,
+                                                   prop_rpm_set = prop_rpm_set,
+                                                   gt_throttle_set = gt_throttle_set,
+                                                   motor_torque_rpm_set = motor_torque_rpm_set,
+                                                   ),
         promotes_inputs=['*'],
         promotes_outputs=['*']
     )
@@ -503,12 +544,14 @@ if __name__ == "__main__":
         # end
         prob.model.connect(f"nacelle{i+1}|power_split_fraction", f"nacelle{i+1}.power_split_fraction_gt")
 
-        if throttle_set:
-            prob.model.connect(f"nacelle{i+1}|throttle", f"nacelle{i+1}.throttle_to_power.throttle")
+        if nac_throttle_set:
+            prob.model.connect(f"nacelle{i+1}|throttle", f"nacelle{i+1}.throttle")
         else:
-            prob.model.connect(f"nacelle{i+1}|total_mech_power_out", f"nacelle{i+1}.throttle_to_power.max_rated_power")
+            prob.model.connect(f"nacelle{i+1}|total_mech_power_out", f"nacelle{i+1}.total_mech_power_out")
         # end
-        prob.model.connect(f"nacelle{i+1}|max_rated_power", f"nacelle{i+1}.throttle_to_power.max_rated_power")
+        prob.model.connect(f"nacelle{i+1}|max_rated_power", f"nacelle{i+1}.max_rated_power")
+        prob.model.connect(f"nacelle{i+1}|prop_rpm", f"nacelle{i+1}.prop.rpm")
+        prob.model.connect(f"nacelle{i+1}|gt_throttle", f"nacelle{i+1}.turb.throttle")
     # end
 
     prob.setup()
