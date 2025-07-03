@@ -61,9 +61,9 @@ class ParallelHybridNacelle(Group):
         if nac_throttle_set:
             nacelle_throttle_to_power = ElementMultiplyDivideComp()
             nacelle_throttle_to_power.add_equation(output_name="mech_power_out", 
-                                    input_names=["throttle", "max_rated_power"], 
-                                    vec_size=[nn,1],
-                                    input_units=[None, "W"],
+                                    input_names=["max_rated_power", "throttle"], 
+                                    vec_size=[1,nn],
+                                    input_units=["kW", None],
                                     divide=[False, False])
             self.add_subsystem("nacelle_throttle_to_power", nacelle_throttle_to_power, promotes_inputs=["*"], promotes_outputs=["*"])        # end
         # define design variables that are independent of flight condition or control states
@@ -256,38 +256,50 @@ class QuadParallelHybridElectricPropulsionSystem(Group):
 
 
 
-        # Combine Electrical Loads for Motor
-        input_motor_names_str = [f"motor{i+1}_{j+1}_elec_load" for i in range(npp) for j in range(nm)]
-        addpower = AddSubtractComp(
-            output_name="motors_elec_load",
-            input_names=input_motor_names_str,
-            units="kW",
-            vec_size=nn,
-        )
-        # Combine Thrust for Propellers
-        input_prop_names_str = [f"prop{i+1}_thrust" for i in range(npp)]
-        addpower.add_equation(
-            output_name="thrust", input_names=input_prop_names_str, units="N", vec_size=nn
-        )
 
-        self.add_subsystem("add_power", subsys=addpower, promotes_outputs=["*"])
+
 
         self.add_subsystem(
             "batt1", DischargeEmpiricalBattery(num_nodes=nn, v_cutoff=2.5), promotes_inputs=['*']
         )
+
+        # Sum Electrical power
+        add_elec_power = AddSubtractComp(promotes_outputs=["*"], promotes_inputs=[], units="W")
+        add_elec_power.add_equation(
+            output_name="p_train_elec", input_names= [f"nacelle{i+1}_motor{j+1}_elec_power" for i in range(npp) for j in range(nm)],
+            vec_size=nn,
+        )
+        self.add_subsystem("add_elec_power", add_elec_power, promotes_inputs=["*"], promotes_outputs=["*"])
+
+
+        # Sum Thrusts
+        addthrust = AddSubtractComp(
+            promotes_outputs=["*"],
+            promotes_inputs=[],
+            units="N",
+            vec_size=nn,
+        )
+        # Combine Thrust for Propellers
+        addthrust.add_equation(
+            output_name="total_thrust", input_names= [f"nacelle{i+1}_prop_thrust_calc" for i in range(npp)], units="N", vec_size=nn
+        )
+
+        self.add_subsystem("add_thrust", subsys=addthrust, promotes_outputs=["*"])
+
         input_motor_weight_names_str = []
+
         input_prop_weight_names_str = []
         input_turbine_weight_names_str = []
+        input_prop_thrust_names_str = []
 
-        input_motor_elec_power_names_str = []
         for i_p in range(npp):
             # Connect Electrical Loads for Motor
             for i_m in range(nm):
-                self.connect(f"nacelle{i_p+1}.motor{i_m+1}.elec_power", f"add_power.motor{i_p+1}_{i_m+1}_elec_load")
                 input_motor_weight_names_str.append(f"nacelle{i_p+1}.motor{i_m+1}_weight")
-                input_motor_elec_power_names_str.append(f"nacelle{i_p+1}.motor{i_m+1}.elec_power")
+
                 self.connect("batt1.v_motor", f"nacelle{i_p+1}.motor{i_m+1}.voltage")
                 self.connect(f"nacelle{i_p+1}.unit_mech_power_in_em", f"nacelle{i_p+1}.motor{i_m+1}.mech_power")
+                self.connect(f"nacelle{i_p+1}.motor{i_m+1}.elec_power", f"nacelle{i_p+1}_motor{i_m+1}_elec_power")
 
                 #self.connect(f"nacelle{i_p+1}.motor{i_m+1}.torque", f"nacelle{i_p+1}.planetary_gearbox.motor{i_m+1}_torque")
                 #self.connect(f"nacelle1{i_p+1}.motor{i_m+1}.rpm", f"nacelle{i_p+1}.planetary_gearbox.motor{i_m+1}_rpm")
@@ -298,11 +310,13 @@ class QuadParallelHybridElectricPropulsionSystem(Group):
             #self.connect(f"nacelle{i_p+1}.prop.thrust", f"add_power.prop{i_p+1}_thrust")
             input_prop_weight_names_str.append(f"nacelle{i_p+1}.prop{i_p+1}_weight")
             input_turbine_weight_names_str.append(f"nacelle{i_p+1}.turb.weight")
+            input_prop_thrust_names_str.append(f"nacelle{i_p+1}.prop.thrust_calc")
+
             self.connect("prop_diameter", f"nacelle{i_p+1}.prop.diameter")
             self.connect("motor_rating", f"nacelle{i_p+1}.power_rating_em")
             self.connect("eng_rating", f"nacelle{i_p+1}.power_rating_gt")
             self.connect("carrier_gear_efficiency",f"nacelle{i_p+1}.carrier_efficiency")
-            self.connect(f"nacelle{i_p+1}.prop.thrust_calc", f"add_power.prop{i_p+1}_thrust")
+            self.connect(f"nacelle{i_p+1}.prop.thrust_calc", f"add_thrust.nacelle{i_p+1}_prop_thrust_calc")
             #self.connect(f"nacelle1.{i}", f"nacelle{i_p+1}.unit_mech_power_in_gt")
             #self.connect(f"nacelle{i_p+1}|power_split_fraction", f"nacelle{i_p+1}.{power_split_fraction_name}")
             #self.connect("num_gt_per_nac", f"nacelle{i_p+1}.num_gt_per_nac")
@@ -326,11 +340,6 @@ class QuadParallelHybridElectricPropulsionSystem(Group):
             output_name="turbine_weight", input_names=input_turbine_weight_names_str, units="kg"
         )
 
-        # Sum Electrical power
-        add_elec_power = AddSubtractComp()
-        add_elec_power.add_equation(
-            output_name="p_train_elec", input_names=input_motor_elec_power_names_str
-        )
 
 
         #self.add_subsystem("add_weights", subsys=addweights, promotes_inputs=["*"], promotes_outputs=["*"])
