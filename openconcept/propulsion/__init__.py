@@ -24,4 +24,5 @@ from .systems import (
     TwinTurbopropPropulsionSystem,
     TwinSeriesHybridElectricThermalPropulsionSystem,
     TwinSeriesHybridElectricThermalPropulsionRefrigerated,
+    QuadParallelHybridElectricPropulsionSystem,
 )

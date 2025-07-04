@@ -12,6 +12,7 @@ from scipy.interpolate import LinearNDInterpolator
 from scipy.interpolate import RBFInterpolator
 from scipy.interpolate import UnivariateSpline
 from scipy.optimize import minimize
+from openconcept.utilities import ElementMultiplyDivideComp, Integrator
 
 import json
 
@@ -120,6 +121,75 @@ def test_interpolation_accuracy():
     plt.show()
     
     return interpolated_values, actual_values, errors, relative_errors
+
+
+class TurboMission(om.Group):
+    """
+    Group containing turbo fuel flow component and mission integrator.
+    
+    This group combines the turbo engine model with mission integration
+    to calculate total fuel consumption over a time period.
+    
+    Parameters
+    ----------
+    num_nodes : int
+        Number of analysis points (default: 100)
+    duration : tuple
+        Time interval for integration (start, end) in seconds (default: (0, 3600))
+    """
+    
+    def initialize(self):
+        self.options.declare('num_nodes', default=100, desc='Number of analysis points')
+        self.options.declare('duration', default=3600, desc='Time interval (start, end) in seconds')
+        self.options.declare('throttle_set', default=True, desc='Set throttle or power for gas turbine')
+    
+    def setup(self):
+        nn = self.options['num_nodes']
+        duration = self.options['duration']
+        throttle_set = self.options['throttle_set']
+        
+        # Add the turbo component
+        self.add_subsystem('turbo', TurboFuelFlowRBF(num_nodes=nn, throttle_set=throttle_set), promotes=["*"])
+        #self.add_subsystem('turbo', TurboFuelFlowFromPowerMetaModel(num_nodes=nn, throttle_set=throttle_set), promotes=["*"])
+        
+        # Add mission integrator
+        integrator = self.add_subsystem('mission_integrator', 
+                                        Integrator(num_nodes=nn, 
+                                                   time_setup="duration",
+                                                   diff_units="h",
+                                                   method="simpson"),
+                                        promotes=["*"])
+        
+        # Set up integrator inputs/outputs
+        integrator.add_integrand('fuel_consumption', units='kg', rate_name='fuel_flow_kgph')
+
+        self.add_subsystem('obj_func', obj_func(num_nodes=nn), promotes=["*"])
+        
+        
+        # Connect fuel flow to integrator
+        #self.connect('fuel_flow_kgph', 'mission_integrator.fuel_flow_kgph')
+    
+class obj_func(om.ExplicitComponent):
+    """
+    Objective function for fuel consumption optimization
+    """
+    def initialize(self):
+        self.options.declare('num_nodes', default=1, desc='Number of analysis points')
+        
+    def setup(self):
+        nn = self.options['num_nodes']
+        self.add_input('fuel_consumption', val=0.0, units='kg', desc='Fuel consumption', shape=(nn,))
+        self.add_output('obj_func_val', val=0.0, desc='Objective function')
+        
+        self.declare_partials('obj_func_val', 'fuel_consumption', method='fd')
+        
+    def compute(self, inputs, outputs):
+        outputs['obj_func_val'] = inputs['fuel_consumption'][-1]
+        
+    def compute_partials(self, inputs, partials):
+        nn = self.options['num_nodes']
+        partials['obj_func_val', 'fuel_consumption'] = np.zeros((nn))
+        partials['obj_func_val', 'fuel_consumption'][-1] = 1.0
 
 
 class TurboFuelFlowRBF(om.ExplicitComponent):
@@ -365,6 +435,7 @@ class TurboFuelFlowFromPowerMetaModel(om.Group):
 
         if throttle_set:
             fuel_flow_metamodel.add_input('throttle', 0.6, training_data=TurboData.dyn_frac_data, units=None, shape=(num_nodes,))
+            fuel_flow_metamodel.add_output('power', 1000.0, training_data=TurboData.dyn_power_data__kW, units="kW", shape=(num_nodes,))
         else:
             fuel_flow_metamodel.add_input('power', 1000.0, training_data=TurboData.dyn_power_data__kW, units="kW", shape=(num_nodes,))
         # end
@@ -406,12 +477,290 @@ def test_rbf_component():
     
     
 
+def optimize_fuel_consumption():
+    """
+    Set up an OpenMDAO optimizer to find optimal altitude, throttle, and Mach for minimum fuel consumption
+    """
+    print("Setting up fuel consumption optimization...")
+    
+    # Set up the OpenMDAO model
+    model = om.Group()
+
+    nn = 11
+    duration =  2  # 1 hour mission
+    
+    # Design variables (to be optimized)
+    ivc = om.IndepVarComp()
+    ivc.add_output('fltcond|h', val=24000 * np.ones(nn), units='ft', desc='Altitude in ft')
+    ivc.add_output('fltcond|M', val=0.2 * np.ones(nn), desc='Mach number')
+    ivc.add_output('throttle', val=0.7 * np.ones(nn), desc='Throttle fraction')
+    ivc.add_output('fltcond|disa', val=0.0 * np.ones(nn), desc='DISA in degrees Celsius')
+    ivc.add_output('duration', val=duration, units='h', desc='Mission duration')
+    ivc.add_output('fuel_consumption_initial', val=0, units='kg', desc='Fuel consumption')
+    
+    model.add_subsystem('ivc', ivc, promotes=['*'])
+    
+    # Add the turbo mission group (includes integrator)
+    model.add_subsystem('turbo_mission', TurboMission(
+        num_nodes=nn, 
+        duration=duration,
+        throttle_set=True
+    ), promotes=['*'])
+
+    
+
+
+    # Set up the problem
+    prob = om.Problem(model, reports=False)
+    
+    # Set up the driver (optimizer)
+    prob.driver = om.ScipyOptimizeDriver()
+    #prob.driver = om.pyOptSparseDriver()
+    prob.driver.options['optimizer'] = 'Powell'
+    prob.driver.options['tol'] = 1e-6 
+    #prob.driver.options['optimizer'] = 'IPOPT'
+    #prob.driver.opt_settings['MAXIT'] = 1000
+
+    #prob.driver.options['tol'] = 1e-6
+    #prob.driver.options['maxiter'] = 1000
+    
+    # Design variables: find altitude wiht lowest fuel consumption
+    prob.model.add_design_var('fltcond|h', lower=2500, upper=26000, units='ft')
+    
+    # Objective (what to minimize) - now total fuel consumption over mission
+    prob.model.add_objective('obj_func_val', scaler=1/700.0)
+    
+    # Constraints
+    prob.model.add_constraint('power', lower=300, upper=800, units='kW')  # Power requirement
+
+
+    # Set up the problem
+    prob.setup()
+    #om.n2(prob)
+    
+    print("Initial conditions:")
+    print("  Altitude: ft")
+    print(prob['fltcond|h'])
+    print("  Mach:")
+    print(prob['fltcond|M'])
+    print("  Throttle:")
+    print(prob['throttle'])
+    print("  Initial fuel flow: kg/h")
+    print(prob['fuel_flow_kgph'])
+    print("  Initial power: kW")
+    print(prob['power'])
+    print("  Mission duration: seconds")
+    print(duration)
+    
+    # Run the optimization
+    print("\nRunning optimization...")
+    prob.run_driver()
+    
+    # Results
+    print("\nOptimization results:")
+    print("  Optimal altitude: ft")
+    print(prob['fltcond|h'])
+    print("  Optimal Mach:")
+    print(prob['fltcond|M'])
+    print("  Optimal throttle:")
+    print(prob['throttle'])
+    print("  Final fuel flow: kg/h")
+    print(prob['fuel_flow_kgph'])
+    print("  Power output: kW")
+    print(prob['power'])
+    print("  Total fuel consumption: kg")
+    print(prob.get_val('obj_func_val'))
+    
+    # Check if optimization was successful
+    if prob.driver.fail:
+        print("Warning: Optimization may not have converged!")
+    else:
+        print("Optimization completed successfully!")
+    
+    return {
+        'altitude': prob['fltcond|h'][0],
+        'mach': prob['fltcond|M'][0],
+        'throttle': prob['throttle'][0],
+        'fuel_flow': prob['fuel_flow_kgph'][0],
+        'power': prob['power'][0],
+        'total_fuel': prob.get_val('obj_func_val'),
+    }
+
+
+def test_turbomission():
+    """
+    Test function to verify TurboMission integrator is working correctly
+    """
+    print("="*60)
+    print("TESTING TURBO MISSION INTEGRATOR")
+    print("="*60)
+    
+    # Set up a simple mission
+    nn = 11  # 10 time points
+    duration = 1.0  # 1 hour mission
+    
+    # Create the model
+    model = om.Group()
+
+    altitude = np.linspace(10000, 15000, nn)
+    mach = np.linspace(0.2, 0.4, nn)
+    throttle = np.linspace(0.6, 0.9, nn)
+    disa = np.linspace(0.0, 0.0, nn)
+    
+    # Add independent variables
+    ivc = om.IndepVarComp()
+    ivc.add_output('fltcond|h', val=altitude, units='ft', desc='Altitude')
+    ivc.add_output('fltcond|M', val=mach, desc='Mach number')
+    ivc.add_output('throttle', val=throttle, desc='Throttle fraction')
+    ivc.add_output('fltcond|disa', val=disa, desc='DISA')
+    ivc.add_output('duration', val=duration, units='h', desc='Mission duration')
+    ivc.add_output('fuel_consumption_initial', val=0, units='kg', desc='Initial fuel consumption')
+    
+    model.add_subsystem('ivc', ivc, promotes=['*'])
+    
+    # Add the turbo mission group
+    model.add_subsystem('turbo_mission', TurboMission(
+        num_nodes=nn,
+        duration=duration,
+        throttle_set=True
+    ), promotes=['*'])
+    
+    # Set up the problem
+    prob = om.Problem(model, reports=False)
+    prob.setup()
+    
+    # Run the model
+    print("Running TurboMission test...")
+    prob.run_model()
+    
+    # Get results
+    fuel_flow = prob.get_val('fuel_flow_kgph')
+    power = prob.get_val('power')
+    fuel_consumption = prob.get_val('fuel_consumption')
+    total_fuel = prob.get_val('obj_func_val')
+    
+    # Formatting Results
+    """
+    print(f"\nResults:")
+    print(f"  Mission duration: {duration} hours")
+    print(f"  Number of time points: {nn}")
+    print(f"  Altitude: {prob['fltcond|h']:.1f} ft")
+    print(f"  Mach: {prob['fltcond|M']:.3f}")
+    print(f"  Throttle: {prob['throttle']:.3f}")
+    print(f"  Average fuel flow: {np.mean(fuel_flow):.2f} kg/h")
+    print(f"  Average power: {np.mean(power):.1f} kW")
+    print(f"  Total fuel consumption: {fuel_consumption:.2f} kg")
+    
+    # Verify integration makes sense
+    expected_fuel = np.mean(fuel_flow) * duration
+    print(f"  Expected fuel consumption: {expected_fuel:.2f} kg")
+    print(f"  Integration accuracy: {abs(fuel_consumption[0] - expected_fuel):.4f} kg")
+    
+    # Test with varying conditions
+    print("\n" + "="*60)
+    print("TESTING WITH VARYING CONDITIONS")
+    print("="*60)
+
+
+    
+    # Plot the results
+    time_points = np.linspace(0, duration, nn)
+    
+    plt.figure(figsize=(12, 8))
+    
+    # Plot altitude
+    plt.subplot(2, 3, 1)
+    plt.plot(time_points, altitude, 'b-', linewidth=2)
+    plt.xlabel('Time (hours)')
+    plt.ylabel('Altitude (ft)')
+    plt.title('Altitude Profile')
+    plt.grid(True, alpha=0.3)
+    
+    # Plot Mach
+    plt.subplot(2, 3, 2)
+    plt.plot(time_points, mach, 'r-', linewidth=2)
+    plt.xlabel('Time (hours)')
+    plt.ylabel('Mach Number')
+    plt.title('Mach Profile')
+    plt.grid(True, alpha=0.3)
+    
+    # Plot throttle
+    plt.subplot(2, 3, 3)
+    plt.plot(time_points, throttle, 'g-', linewidth=2)
+    plt.xlabel('Time (hours)')
+    plt.ylabel('Throttle')
+    plt.title('Throttle Profile')
+    plt.grid(True, alpha=0.3)
+    
+    # Plot fuel flow
+    plt.subplot(2, 3, 4)
+    plt.plot(time_points, fuel_flow, 'orange', linewidth=2)
+    plt.xlabel('Time (hours)')
+    plt.ylabel('Fuel Flow (kg/h)')
+    plt.title('Fuel Flow Profile')
+    plt.grid(True, alpha=0.3)
+    
+    # Plot power
+    plt.subplot(2, 3, 5)
+    plt.plot(time_points, power, 'purple', linewidth=2)
+    plt.xlabel('Time (hours)')
+    plt.ylabel('Power (kW)')
+    plt.title('Power Profile')
+    plt.grid(True, alpha=0.3)
+    
+    # Plot cumulative fuel consumption
+    plt.subplot(2, 3, 6)
+    # Calculate cumulative fuel consumption manually for verification
+    dt = duration / (nn - 1)  # Time step
+    cumulative_fuel = np.cumsum(fuel_flow) * dt
+    plt.plot(time_points, cumulative_fuel, 'brown', linewidth=2, label='Cumulative')
+    plt.axhline(y=fuel_consumption[0], color='red', linestyle='--', label=f'Integrator: {fuel_consumption[0]:.2f} kg')
+    plt.xlabel('Time (hours)')
+    plt.ylabel('Cumulative Fuel (kg)')
+    plt.title('Fuel Consumption')
+    plt.legend()
+    plt.grid(True, alpha=0.3)
+    
+    plt.tight_layout()
+    plt.show()
+    
+    print("\n" + "="*60)
+    print("TURBO MISSION TEST COMPLETED")
+    print("="*60)
+    print("If the integration results make sense, the TurboMission integrator is working correctly!")
+    """
+
+
+
+
 if __name__ == "__main__":
-    
-
-
-    
-    test_rbf_component()
+    #test_rbf_component()
     # Test interpolation accuracy
     #test_interpolation_accuracy()
     
+    # Test TurboMission integrator
+    #test_turbomission()
+    
+    # Run fuel consumption optimization
+    print("="*60)
+    print("FUEL CONSUMPTION OPTIMIZATION")
+    print("="*60)
+    
+    # Mission optimization
+    print("\n1. Mission optimization (minimum total fuel consumption):")
+    print("-" * 50)
+    result1 = optimize_fuel_consumption()
+    
+    # Results summary
+    print("\n" + "="*60)
+    print("MISSION OPTIMIZATION RESULTS")
+    print("="*60)
+    print(f"{'Metric':<25} {'Value':<15} {'Units':<10}")
+    print("-" * 60)
+    print(f"{'Optimal Altitude':<25} {result1['altitude']:<15.1f} {'ft':<10}")
+    print(f"{'Optimal Mach':<25} {result1['mach']:<15.3f} {'':<10}")
+    print(f"{'Optimal Throttle':<25} {result1['throttle']:<15.3f} {'':<10}")
+    print(f"{'Final Fuel Flow':<25} {result1['fuel_flow']:<15.2f} {'kg/h':<10}")
+    print(f"{'Power Output':<25} {result1['power']:<15.1f} {'kW':<10}")
+    print(f"{'Total Fuel Consumption':<25} {result1['total_fuel'][0]:<15.2f} {'kg':<10}")
+

@@ -12,3 +12,7 @@ from .thermal_series_hybrid import (
     TwinSeriesHybridElectricThermalPropulsionSystem,
     TwinSeriesHybridElectricThermalPropulsionRefrigerated,
 )
+
+from .parallel_hybrid import (
+    QuadParallelHybridElectricPropulsionSystem
+)
