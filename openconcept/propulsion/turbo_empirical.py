@@ -411,7 +411,7 @@ if __name__ == "__main__":
 
 
     
-    #test_rbf_component()
+    test_rbf_component()
     # Test interpolation accuracy
-    test_interpolation_accuracy()
+    #test_interpolation_accuracy()
     
