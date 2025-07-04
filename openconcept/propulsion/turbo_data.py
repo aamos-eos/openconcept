@@ -29,6 +29,15 @@ class TurboData:
     idle_fuel_flow_data__kgph = None
     idle_power_data__kW = None
 
+    # Test data
+    test_alt_data__m = None
+    test_mach_data = None
+    test_disa_data__degC = None
+    test_throttle_data = None
+    test_power_data__kW = None
+    test_fuel_flow_data__kgph = None
+    test_condition_type = None  # 'idle', 'static', or 'dynamic'
+
 
     
     @classmethod
@@ -103,4 +112,80 @@ class TurboData:
         """Ensure data is loaded and return all data as a tuple"""
         if cls.dyn_disa_data__degC is None:
             cls.load_data(turbo_filename, sheet_name)
-        return cls 
+        return cls
+
+    @classmethod
+    def load_test_data(cls, turbo_filename, sheet_name='CRZ', n_points=100, seed=42):
+        """
+        Load clean test data by combining static, dynamic, and idle conditions.
+        Removes NaNs and duplicates, then samples n random points.
+        
+        Parameters
+        ----------
+        n_points : int
+            Number of test points to sample
+        seed : int
+            Random seed for reproducible sampling
+            
+        Returns
+        -------
+        dict
+            Dictionary containing test data arrays and condition types
+        """
+
+
+        df_test = pd.read_excel(turbo_filename, sheet_name=sheet_name)
+        
+        # Rename columns
+        df_test.columns = [
+            'DISA', 'Altitude_ft', 'Mach', 'FRAC', 'power_SHP', 'FuelFlow_pph', 'JetThrust_lbf',
+            'Altitude', 'power_kW', 'FuelFlow_kgph', 'JetThrust_N'
+        ]
+
+        # Define your input columns
+        input_cols = ['DISA','Altitude','Mach','FRAC','power_kW','FuelFlow_kgph']  # replace with your actual input columns
+        
+        # Find all rows where the input combination is duplicated (singular points)
+        df_test.drop_duplicates(subset=input_cols, keep='first')
+
+        # Drop any rows with NaN values
+        df_test = df_test.dropna()
+        
+        
+        # Sample n_points randomly
+        if len(df_test) > n_points:
+            np.random.seed(seed)
+            sample_indices = np.random.choice(len(df_test), n_points, replace=False)
+            df_test = df_test.iloc[sample_indices].reset_index(drop=True)
+        else:
+            print(f"Warning: Only {len(df_test)} points available, using all of them")
+        
+        # Store test data in class variables
+        cls.test_alt_data__m = df_test['Altitude'].values
+        cls.test_mach_data = df_test['Mach'].values
+        cls.test_disa_data__degC = df_test['DISA'].values
+        cls.test_throttle_data = df_test['FRAC'].values
+        cls.test_power_data__kW = df_test['power_kW'].values
+        cls.test_fuel_flow_data__kgph = df_test['FuelFlow_kgph'].values
+
+        # Add simple condition mask using vectorized operations
+        idle_mask = df_test['FRAC'] == 0
+        static_mask = (df_test['Mach'] == 0) & (df_test['FRAC'] != 0)
+        dynamic_mask = (df_test['Mach'] != 0) & (df_test['FRAC'] != 0)
+        
+        cls.test_condition_type = np.where(idle_mask, 'idle', 
+                                          np.where(static_mask, 'static', 'dynamic'))
+
+        print(f"Test data loaded: {len(df_test)} points ({np.sum(idle_mask)} idle, "
+              f"{np.sum(static_mask)} static, "
+              f"{np.sum(dynamic_mask)} dynamic)")
+
+        return {
+            'Altitude': cls.test_alt_data__m,
+            'Mach': cls.test_mach_data,
+            'DISA': cls.test_disa_data__degC,
+            'FRAC': cls.test_throttle_data,
+            'power_kW': cls.test_power_data__kW,
+            'FuelFlow_kgph': cls.test_fuel_flow_data__kgph,
+            'condition_type': cls.test_condition_type
+        } 

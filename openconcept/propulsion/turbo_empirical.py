@@ -8,6 +8,7 @@ import pandas as pd
 import matplotlib.pyplot as plt
 from matplotlib.backends.backend_pdf import PdfPages
 from scipy.interpolate import NearestNDInterpolator
+from scipy.interpolate import LinearNDInterpolator
 from scipy.interpolate import RBFInterpolator
 from scipy.interpolate import UnivariateSpline
 from scipy.optimize import minimize
@@ -27,18 +28,11 @@ def test_interpolation_accuracy():
     """
     print("Testing interpolation accuracy...")
     
-    # Get the data
-    turbo_data = TurboData.get_data(turbo_filename='openconcept/propulsion/empirical_data/PT6E-67XP-4_EngData.xlsx', sheet_name='CRZ')
+    # Get clean test data across all conditions (idle, static, dynamic)
+    test_data = TurboData.load_test_data(turbo_filename='openconcept/propulsion/empirical_data/PT6E-67XP-4_EngData.xlsx', sheet_name='CRZ', n_points=100, seed=42)
     
-    # Randomly sample 100 points from dynamic conditions
-    n_test_points = 100
-    n_total_points = len(turbo_data.dyn_fuel_flow_data__kgph)
-    
-    # Generate random indices
-    np.random.seed(42)  # For reproducible results
-    test_indices = np.random.choice(n_total_points, n_test_points, replace=False)
-    
-    print(f"Testing {n_test_points} randomly sampled points from {n_total_points} total dynamic data points...")
+    n_test_points = len(test_data['Altitude'])
+    print(f"Testing {n_test_points} points across all conditions...")
     
     # Set up the OpenMDAO model for testing
     num_nodes = n_test_points
@@ -46,26 +40,24 @@ def test_interpolation_accuracy():
     model = om.Group()
     ivc = om.IndepVarComp()
     
-    # Add independent variables with the randomly sampled data points
-    ivc.add_output('fltcond|h', turbo_data.dyn_alt_data__m[test_indices], units='m', desc='Altitude in meters')
-    ivc.add_output('fltcond|M', turbo_data.dyn_mach_data[test_indices], desc='Mach number')
-    ivc.add_output('fltcond|disa', turbo_data.dyn_disa_data__degC[test_indices], desc='DISA in degrees Celsius')
-    #ivc.add_output('throttle', turbo_data.dyn_frac_data[test_indices], desc='Throttle fraction')
-    ivc.add_output('power', turbo_data.dyn_power_data__kW[test_indices], units='kW', desc='Power output')
+    # Add independent variables with the test data points
+    ivc.add_output('fltcond|h', test_data['Altitude'], units='m', desc='Altitude in meters')
+    ivc.add_output('fltcond|M', test_data['Mach'], desc='Mach number')
+    ivc.add_output('fltcond|disa', test_data['DISA'], desc='DISA in degrees Celsius')
+    ivc.add_output('throttle', test_data['FRAC'], desc='Throttle fraction')
 
     model.add_subsystem('ivc', ivc, promotes=['*'])
-    #model.add_subsystem('power_solver', TurboFuelFlowFromPower(num_nodes=num_nodes), promotes=["*"])
-    model.add_subsystem('fuel_flow_group', TurboFuelFlowRBF(num_nodes=num_nodes), promotes=["*"])
+    model.add_subsystem('fuel_flow_group', TurboFuelFlowRBF(num_nodes=num_nodes, throttle_set=True), promotes=["*"])
 
     prob = om.Problem(model, reports=False)
     prob.setup()
     
-    # Run the model with the randomly sampled data points
+    # Run the model with the test data points
     prob.run_model()
     
     # Get interpolated values
     interpolated_values = prob.get_val('fuel_flow_kgph')
-    actual_values = turbo_data.dyn_fuel_flow_data__kgph[test_indices]
+    actual_values = test_data['FuelFlow_kgph']
     
     # Calculate statistics
     errors = np.abs(interpolated_values - actual_values)
@@ -76,6 +68,18 @@ def test_interpolation_accuracy():
     print(f"Mean relative error: {np.mean(relative_errors):.2f}%")
     print(f"Max relative error: {np.max(relative_errors):.2f}%")
     
+    # Calculate statistics by condition type
+    condition_types = test_data['condition_type']
+    for condition in ['idle', 'static', 'dynamic']:
+        condition_mask = [c == condition for c in condition_types]
+        if any(condition_mask):
+            condition_errors = errors[condition_mask]
+            condition_relative_errors = relative_errors[condition_mask]
+            print(f"\n{condition.capitalize()} conditions:")
+            print(f"  Mean absolute error: {np.mean(condition_errors):.2f} kg/h")
+            print(f"  Mean relative error: {np.mean(condition_relative_errors):.2f}%")
+            print(f"  Number of points: {sum(condition_mask)}")
+    
     # Create the comparison plot
     plt.figure(figsize=(10, 8))
     
@@ -85,7 +89,7 @@ def test_interpolation_accuracy():
     plt.plot([actual_values.min(), actual_values.max()], [actual_values.min(), actual_values.max()], 'r--', linewidth=2)
     plt.xlabel('Actual Fuel Flow (kg/h)')
     plt.ylabel('Interpolated Fuel Flow (kg/h)')
-    plt.title('Dynamic Conditions: Actual vs Interpolated (100 Random Points)')
+    plt.title('All Conditions: Actual vs Interpolated')
     plt.grid(True, alpha=0.3)
     
     # Plot error distribution
@@ -184,10 +188,12 @@ class TurboFuelFlowRBF(om.ExplicitComponent):
         
         X_train = np.column_stack([alt_data, mach_data, disa_data, throttle_data])
         cls._dyn_fuel_flow_interpolator = RBFInterpolator(X_train, fuel_flow_data, kernel='thin_plate_spline')
+        #cls._dyn_fuel_flow_interpolator = LinearNDInterpolator(X_train, fuel_flow_data)
 
         print("Dynamic fuel flow interpolator built successfully!")
         
         cls._dyn_power_interpolator = RBFInterpolator(X_train, power_data_kW, kernel='thin_plate_spline')
+        #cls._dyn_power_interpolator = LinearNDInterpolator(X_train, power_data_kW)
         print("Dynamic power interpolator built successfully!")
         # Build idle interpolators
         idle_alt_data = TurboData.idle_alt_data__m
@@ -250,7 +256,7 @@ class TurboFuelFlowRBF(om.ExplicitComponent):
             throttle = inputs['throttle']
             # Define conditions
             idle_condition = (throttle == 0)
-            static_condition = (mach == 0)
+            static_condition = np.logical_and(mach == 0, throttle != 0)
             
             # Get indices for each 
             idle_indices = np.where(idle_condition)[0]
@@ -295,7 +301,7 @@ class TurboFuelFlowRBF(om.ExplicitComponent):
         else:
             power = inputs['power']
             # Define conditions
-            static_condition = (mach == 0)
+            static_condition = np.logical_and(mach == 0, power > 0)
             
             # Get indices for each condition
             static_indices = np.where(static_condition)[0]
@@ -368,9 +374,7 @@ class TurboFuelFlowFromPowerMetaModel(om.Group):
         self.add_subsystem('fuel_flow_metamodel', fuel_flow_metamodel, promotes=["*"])
 
 
-if __name__ == "__main__":
-    
-
+def test_rbf_component():
 
     num_nodes = 30
     
@@ -400,6 +404,14 @@ if __name__ == "__main__":
     print("Power [kW]:")
     print(prob.get_val('power'))
     
+    
+
+if __name__ == "__main__":
+    
+
+
+    
+    #test_rbf_component()
     # Test interpolation accuracy
     test_interpolation_accuracy()
     
