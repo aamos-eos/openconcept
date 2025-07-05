@@ -37,6 +37,10 @@ OpenConcept can be pip installed directly from PyPI
 pip install openconcept
 ```
 
+Dependencies list
+- pyoptsparse (conda install -c conda-forge pyoptsparse)
+- pandas, matplotlib, openpyxl, pathlib, scikit-learn
+
 To run the examples or edit the source code:
 1. Clone the repo to disk (`git clone https://github.com/mdolab/openconcept`)
 2. Navigate to the root `openconcept` folder
