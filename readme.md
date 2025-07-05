@@ -38,7 +38,7 @@ pip install openconcept
 ```
 
 Dependencies list
-- pyoptsparse (conda install -c conda-forge pyoptsparse)
+- pyoptsparse (`conda install -c conda-forge pyoptsparse`)
 - pandas, matplotlib, openpyxl, pathlib, scikit-learn
 
 To run the examples or edit the source code:
